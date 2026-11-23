@@ -36,9 +36,11 @@ const PUBLISH_EVERY_MS = 250;
 // `start` says where each wallet part of the running session started from
 // (see midnight.openWallet): shielded `{ from: 'snapshot' | 'birthday' |
 // 'start', reason }`, unshielded and DUST 'snapshot' or 'fresh'.
+// `notice` says, in words, why the wallet is syncing again (see chainRewound)
+// until it is synced; `applied` is midnight.appliedOf's.
 const idleSync = () => ({
   status: 'idle', error: null, percent: 0, parts: { shielded: { percent: 0 }, unshielded: { percent: 0 }, dust: { percent: 0 } }, tip: null,
-  start: null, refreshing: false,
+  start: null, refreshing: false, notice: null, applied: null,
 });
 const state = {
   network: DEFAULT_NETWORK, networks: [], hasWallet: false, ownWallet: false, sharedWallet: false, locked: false, addresses: null,
@@ -162,7 +164,7 @@ async function startSession() {
     dust: n.dust,
   };
   session = run;
-  state.sync = { ...idleSync(), status: 'connecting' };
+  state.sync = { ...idleSync(), status: 'connecting', notice: state.sync.notice };
   publish();
   try {
     const endpoints = await endpointsFor(n.id);
@@ -206,6 +208,7 @@ async function startSession() {
     if (stored && stored.indexerHttp === endpoints.indexerHttp) resume = await vault.decryptJson(keys.key, stored.box);
     run.wallet = await midnight.openWallet({
       net: n, endpoints, seed: vault.fromHex(keys.seedHex), snapshot: resume, birthday: record.birthday ?? null,
+      onRewound: () => { chainRewound(run); },
     });
     if (run.stopped) { await run.wallet.stop().catch(() => {}); return; }
     state.sync.start = {
@@ -224,7 +227,7 @@ function onState(run, s) {
   if (session !== run) return;
   const wasSynced = run.latest?.isSynced;
   run.latest = s;
-  const sync = midnight.syncOf(s, { dust: run.dust });
+  const sync = { ...midnight.syncOf(s, { dust: run.dust }), applied: midnight.appliedOf(s) };
   if (s.isSynced) run.everSynced = true;
   // The DUST wallet re-reads its state in a pass every 30 seconds (see
   // midnight.FastDustWallet), and while a pass runs the SDK reports DUST as
@@ -238,13 +241,16 @@ function onState(run, s) {
   // lost.
   const ahead = (before, now) => (state.sync.status === 'syncing' && now < 100 ? Math.max(before ?? 0, now) : now);
   state.sync = refreshing
-    ? { ...state.sync, status: 'synced', percent: 100, parts: { ...sync.parts, dust: { percent: 100 } }, refreshing: true, error: null }
+    ? { ...state.sync, status: 'synced', percent: 100, parts: { ...sync.parts, dust: { percent: 100 } }, applied: sync.applied, refreshing: true, error: null }
     : {
       ...state.sync, ...sync, refreshing: false, error: null,
       percent: ahead(state.sync.percent, sync.percent),
       parts: Object.fromEntries(Object.entries(sync.parts).map(([k, p]) => [k, { percent: ahead(state.sync.parts?.[k]?.percent, p.percent) }])),
     };
-  if (s.isSynced) retryDelay = 2000;
+  if (s.isSynced) {
+    retryDelay = 2000;
+    state.sync.notice = null;
+  }
   refreshDustWhileBooked(run, s);
   // Save as soon as the first sync completes: that is the expensive part.
   if (s.isSynced && !wasSynced) saveSnapshot(run);
@@ -301,8 +307,35 @@ function sessionFailed(run, error) {
   retryDelay = Math.min(retryDelay * 2, 60000);
 }
 
+// An indexer whose newest blocks are provisional can drop them, and then
+// answers the wallet's sync with CHAIN_REWOUND (see midnight.js, "rewind").
+// What the wallet synced may name dropped blocks and ids the indexer has
+// numbered anew, and the SDK cannot sync on from it, so the session stops
+// and the snapshot goes, as a rescan's does (with the SDK's history and its
+// records of the wallet's own transactions): the wallet record, its
+// birthday, the notes on its own transactions, token labels and site
+// approvals stay. The session starts again from the birthday after the
+// usual backoff, which a rewind while syncing again doubles like any other
+// failure. While locked there is no session: a snapshot from before a
+// rewind fails the same way at the next unlock.
+const REWOUND_NOTICE = 'The network replaced its recent blocks; syncing again';
+async function chainRewound(run) {
+  if (session !== run || run.rewound) return;
+  run.rewound = true;
+  await stopSession({ save: false });
+  await run.saving;
+  await db.forNetwork(run.network).delete('snapshot');
+  // The user may have switched networks or locked meanwhile.
+  if (session || state.locked || store.network !== run.network) return;
+  state.sync = { ...state.sync, status: 'connecting', notice: REWOUND_NOTICE };
+  publish();
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(startSession, retryDelay);
+  retryDelay = Math.min(retryDelay * 2, 60000);
+}
+
 async function saveSnapshot(run) {
-  if (!run.wallet || run.saving || !unlocked.has(run.network)) return run.saving;
+  if (!run.wallet || run.saving || run.rewound || !unlocked.has(run.network)) return run.saving;
   run.saving = (async () => {
     try {
       const keys = unlocked.get(run.network);

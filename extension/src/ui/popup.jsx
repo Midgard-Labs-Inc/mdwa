@@ -313,7 +313,7 @@ function Wallet({ state, onForm }) {
     let live = true;
     ui('overview').then(o => { if (live) setOverview(o); }, () => {});
     return () => { live = false; };
-  }, [sync?.status, Math.floor(sync?.percent ?? 0), state.busy?.stage, page === null]);   // eslint-disable-line react-hooks/exhaustive-deps
+  }, [sync?.status, Math.floor(sync?.percent ?? 0), sync?.applied, state.busy?.stage, page === null]);   // eslint-disable-line react-hooks/exhaustive-deps
   const back = () => setPage(null);
 
   if (page === 'receive') return <Receive state={state} onBack={back} />;
@@ -327,7 +327,7 @@ function Wallet({ state, onForm }) {
       <MainHeader identity={<WalletIdentity address={state.addresses?.unshielded} />}
         status={<><SyncPill {...syncPill(sync)} onClick={() => setPage('sync')} /><NetworkMenu state={state} onForm={onForm} /></>} />
       {tab === 'home' && <Home state={state} overview={overview} onOpen={setPage} />}
-      {tab === 'activity' && <Activity network={state.network} refresh={`${sync?.tip}:${sync?.status}:${state.busy?.stage}`} onOpen={tx => setPage({ tx })} />}
+      {tab === 'activity' && <Activity network={state.network} refresh={`${sync?.tip}:${sync?.status}:${sync?.applied}:${state.busy?.stage}`} onOpen={tx => setPage({ tx })} />}
       {tab === 'sites' && <Sites state={state} />}
       {tab === 'settings' && <Settings state={state} onForm={onForm} />}
       <BottomNav>

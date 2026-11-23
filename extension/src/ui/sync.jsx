@@ -25,11 +25,11 @@ export function SyncSummary({ sync, onClick }) {
   if (sync?.status === 'error') return <SyncCard title="Disconnected from the network" error={sync.error ?? 'Reconnecting…'} onClick={onClick} />;
   if (sync?.status === 'synced') return <SyncCard title="At the chain tip" progress={1} left={tip} onClick={onClick} />;
   if (sync?.status === 'syncing') {
-    return <SyncCard title="Catching up with the chain" percent={percentText(sync.percent)} progress={(sync.percent ?? 0) / 100}
+    return <SyncCard title={sync.notice ?? 'Catching up with the chain'} percent={percentText(sync.percent)} progress={(sync.percent ?? 0) / 100}
       left={sync.tip != null ? `Chain tip ${withCommas(sync.tip)}` : undefined} onClick={onClick} />;
   }
   if (sync?.error) return <SyncCard title="Cannot reach the network yet" error={sync.error} onClick={onClick} />;
-  return <SyncCard title="Connecting to the network…" onClick={onClick} />;
+  return <SyncCard title={sync?.notice ?? 'Connecting to the network…'} onClick={onClick} />;
 }
 
 /**
