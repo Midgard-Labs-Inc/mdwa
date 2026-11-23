@@ -8,6 +8,9 @@
 // SDK's projections sync, and the shielded wallet started at the wallet
 // birthday (see "fast sync" below and birthday.js).
 //
+// A network without DUST, or one that takes transactions over HTTP, gets
+// custom.js's stand-in DUST wallet or submission service instead.
+//
 // It has no storage and no messaging, so the same code runs in the extension's
 // engine worker and under Node (scripts/smoke.mjs).
 import {
@@ -30,8 +33,9 @@ import { Effect, Option } from 'effect';
 import * as ledger from '@midnightntwrk/ledger-v9';
 import * as ledgerV8 from '@midnightntwrk/ledger-v8';
 import { mnemonicToSeed } from '@scure/bip39';
-import { connectionUrls, network as networkInfo } from '../../wallet/networks.mjs';
+import { connectionUrls } from '../../wallet/networks.mjs';
 import { gql, shieldedAnchor, zswapCollapsedUpdate } from './birthday.js';
+import { noDustWallet, submissionService } from './custom.js';
 
 export const NIGHT = Token.night;
 const SNAPSHOT_VERSION = 1;
@@ -55,12 +59,13 @@ export async function seedFromMnemonic(mnemonic) {
   return new Uint8Array(await mnemonicToSeed(words.join(' ')));
 }
 
-/** The wallet's three addresses and shielded keys, straight from the seed with
- *  the same derivations the SDK's wallets start from (WalletSeeds, then the
- *  ledger's key objects), so they are known before any connection and while
- *  the wallet is locked. */
-export function deriveAddresses(seed, network) {
-  const networkId = networkInfo(network).networkId;
+/** The wallet's three addresses and shielded keys on network `net` (a
+ *  definition, wallet/networks.mjs), straight from the seed with the same
+ *  derivations the SDK's wallets start from (WalletSeeds, then the ledger's
+ *  key objects), so they are known before any connection and while the
+ *  wallet is locked. */
+export function deriveAddresses(seed, net) {
+  const { networkId } = net;
   const seeds = WalletSeeds.fromMasterSeed(seed);
   const keystore = createKeystore({ kind: 'schnorr', secret: seeds.unshielded }, networkId);
   const zswap = ledger.ZswapSecretKeys.fromSeed(seeds.shielded);
@@ -79,16 +84,17 @@ export function deriveAddresses(seed, network) {
 }
 
 // ---------------------------------------------------------------- facade ---
-/** The SDK configuration of a network. connectionUrls throws the Blockfrost
- *  message when a project id is needed and missing. */
-export function sdkConfiguration(network, endpoints, txHistoryStorage) {
-  const urls = connectionUrls(network, endpoints);
+/** The SDK configuration of network `net`. connectionUrls throws the
+ *  Blockfrost message when a project id is needed and missing. */
+export function sdkConfiguration(net, endpoints, txHistoryStorage) {
+  const urls = connectionUrls(net, endpoints);
   return {
-    networkId: networkInfo(network).networkId,
+    networkId: net.networkId,
     costParameters: { feeBlocksMargin: 5 },
     // Submission goes through the node; sync also cross-checks the indexer
-    // against this node's finalized head.
-    relayURL: new URL(urls.node),
+    // against this node's finalized head. A network with a submit URL has
+    // no node: the SDK then skips that check, and custom.js submits.
+    ...(urls.node ? { relayURL: new URL(urls.node) } : {}),
     indexerClientConnection: { indexerHttpUrl: urls.indexerHttp, indexerWsUrl: urls.indexerWs },
     // A proof server is one URL for whichever ledger version a transaction
     // belongs to. The in-process prover is set up by wasmProvingService below
@@ -337,7 +343,8 @@ function startShieldedAtAnchor(Shielded, config, seeds, anchor, update) {
 }
 
 /**
- * Builds and starts the facade for one network from the 64-byte seed.
+ * Builds and starts the facade for network `net` (a definition,
+ * wallet/networks.mjs) from the 64-byte seed.
  * `snapshot` (what serialize() returned earlier) resumes the three wallets,
  * the history and the lifecycle records instead of syncing from the start.
  * A snapshot whose history the SDK cannot read is ignored as a whole; a
@@ -350,8 +357,9 @@ function startShieldedAtAnchor(Shielded, config, seeds, anchor, update) {
  * inconsistent answer), the shielded wallet starts at the beginning of the
  * chain instead, and `shieldedStart.reason` says why.
  */
-export async function openWallet({ network, endpoints, seed, snapshot = null, birthday = null }) {
-  const networkId = networkInfo(network).networkId;
+export async function openWallet({ net, endpoints, seed, snapshot = null, birthday = null }) {
+  const { networkId } = net;
+  const urls = connectionUrls(net, endpoints);
   const seeds = WalletSeeds.fromMasterSeed(seed);
   const keystore = createKeystore({ kind: 'schnorr', secret: seeds.unshielded }, networkId);
   let resume = snapshot?.version === SNAPSHOT_VERSION ? snapshot : null;
@@ -360,7 +368,7 @@ export async function openWallet({ network, endpoints, seed, snapshot = null, bi
     try { history = InMemoryTransactionHistoryStorage.restore(resume.history, WalletEntrySchema, mergeWalletEntries); }
     catch { resume = null; }
   }
-  const configuration = sdkConfiguration(network, endpoints, history);
+  const configuration = sdkConfiguration(net, endpoints, history);
   // How each part started: 'snapshot', or afresh ('birthday' or 'start').
   const started = { shielded: null, unshielded: null, dust: null };
   let shieldedStart = { from: 'start', reason: null };
@@ -393,7 +401,9 @@ export async function openWallet({ network, endpoints, seed, snapshot = null, bi
     shielded: config => restoreOr(ShieldedWallet(config), 'shielded', () => freshShielded(ShieldedWallet(config), config)),
     unshielded: config => restoreOr(UnshieldedWallet(config), 'unshielded',
       () => UnshieldedWallet(config).startWithPublicKey(PublicKey.fromKeyStore(keystore))),
-    dust: config => restoreOr(FastDustWallet(config), 'dust', () => FastDustWallet(config).startWithSeed(seeds.dust)),
+    dust: config => (!net.dust ? noDustWallet(config, seeds.dust)
+      : restoreOr(FastDustWallet(config), 'dust', () => FastDustWallet(config).startWithSeed(seeds.dust))),
+    ...(urls.submitUrl ? { submissionService: () => submissionService(urls.submitUrl) } : {}),
     ...(configuration.provers ? { provingService: config => wasmProvingService(config.forks) } : {}),
     ...(resume?.lifecycle ? {
       transactionLifecycleService: (config, { clock }) =>
@@ -403,7 +413,7 @@ export async function openWallet({ network, endpoints, seed, snapshot = null, bi
   await facade.start(seeds);
   if (started.shielded === 'snapshot') shieldedStart = { from: 'snapshot', reason: null };
   return {
-    network, networkId, facade, keystore, seeds, history, started, shieldedStart,
+    net, networkId, facade, keystore, seeds, history, started, shieldedStart,
     // Where the chain hands over between ledger versions, as the facade
     // resolved it (the SDK's default schedule: none is configured here).
     forks: WalletFacade.resolveConfiguration(configuration).forks,
@@ -431,17 +441,20 @@ const percentOf = (applied, highest, done) => {
   return Math.max(0, Math.min(99.99, p));
 };
 
-/** The engine's sync block from one facade state. */
-export function syncOf(s) {
+/** The engine's sync block from one facade state. Without `dust` (a network
+ *  without DUST, whose DUST wallet is a stand-in), the shielded and
+ *  unshielded wallets only. */
+export function syncOf(s, { dust = true } = {}) {
   const synced = s.isSynced;
   const sh = s.shielded.progress, un = s.unshielded.progress, du = s.dust.progress;
   const parts = {
     shielded: { percent: percentOf(sh.appliedIndex, sh.highestRelevantWalletIndex, synced || sh.isStrictlyComplete?.()) },
     unshielded: { percent: percentOf(un.appliedId, un.highestTransactionId, synced || un.isStrictlyComplete?.()) },
-    dust: { percent: percentOf(du.appliedIndex, du.highestRelevantWalletIndex, synced || du.isStrictlyComplete?.()) },
+    ...(dust ? { dust: { percent: percentOf(du.appliedIndex, du.highestRelevantWalletIndex, synced || du.isStrictlyComplete?.()) } } : {}),
   };
   const connected = sh.isConnected && un.isConnected && du.isConnected;
-  const percent = synced ? 100 : Math.round((parts.shielded.percent + parts.unshielded.percent + parts.dust.percent) / 3 * 100) / 100;
+  const shown = Object.values(parts);
+  const percent = synced ? 100 : Math.round(shown.reduce((a, p) => a + p.percent, 0) / shown.length * 100) / 100;
   // The three wallets report connected one by one, and one can be reading
   // blocks while another still connects (seen on Preview): progress counts
   // as syncing.

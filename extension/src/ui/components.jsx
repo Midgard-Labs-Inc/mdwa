@@ -10,7 +10,7 @@ import { Badge } from '@cloudflare/kumo/components/badge';
 import { Button } from '@cloudflare/kumo/components/button';
 import { InputArea } from '@cloudflare/kumo/components/input';
 import { InputGroup } from '@cloudflare/kumo/components/input-group';
-import { NETWORK_LOOK } from './brand.jsx';
+import { networkLook } from './brand.jsx';
 import { addressTail, compactAddress, nightParts, tokenLetters } from './format.js';
 
 const cx = (...parts) => parts.filter(Boolean).join(' ');
@@ -67,7 +67,7 @@ export function NetworkPill({ network, name, caret = true, className, ...props }
     <Tag {...(caret ? { type: 'button' } : {})} {...props}
       className={cx('inline-flex h-6 shrink-0 items-center gap-1.5 rounded-full border whitespace-nowrap border-kumo-line bg-kumo-base pl-[9px] text-xs font-medium text-kumo-default',
         caret ? 'pr-2 outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus/50' : 'pr-[9px]', className)}>
-      <span className={cx('size-1.5 rounded-full', NETWORK_LOOK[network]?.dot ?? 'bg-kumo-badge-neutral')} />
+      <span className={cx('size-1.5 rounded-full', networkLook(network).dot)} />
       {name}
       {caret && <CaretDownIcon size={10} className="text-kumo-subtle" />}
     </Tag>

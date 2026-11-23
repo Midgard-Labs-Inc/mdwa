@@ -63,11 +63,13 @@ export const tokenLetters = type => type.replace(/^0x/, '').slice(0, 2).toUpperC
 /**
  * Bech32m addresses read "mn_addr_preview1abc…": by default keep the prefix
  * through the separator plus four characters, or `head` characters when the
- * space is tight (the header), then the last six.
+ * space is tight (the header), then the last six. A network id may hold
+ * digits and hyphens ("mn_addr_dev-11abc…"); the separator is the last "1",
+ * since the data part never has one, which is where the greedy match ends.
  */
 export function shortAddress(address, head) {
   if (!address) return '';
-  const keep = head ?? (/^[a-z_-]+1/.exec(address)?.[0].length ?? 12) + 4;
+  const keep = head ?? (/^mn_[a-z0-9_-]+1/.exec(address)?.[0].length ?? 12) + 4;
   return address.length > keep + 7 ? `${address.slice(0, keep)}…${address.slice(-6)}` : address;
 }
 
@@ -78,7 +80,7 @@ export function shortAddress(address, head) {
  */
 export function compactAddress(address) {
   if (!address) return '';
-  const type = /^(mn_(?:shield-addr|addr|dust))(?:_[a-z0-9]+)?1/.exec(address)?.[1];
+  const type = /^(mn_(?:shield-addr|addr|dust))(?:_[a-z0-9-]+)?1/.exec(address)?.[1];
   return type && address.length > type.length + 8 ? `${type}…${address.slice(-6)}` : shortAddress(address);
 }
 
@@ -131,8 +133,14 @@ const BUSY_TEXT = {
 };
 export const busyText = busy => BUSY_TEXT[busy?.stage] ?? 'Working…';
 
+/** The selected network as the engine state lists it: `{ id, name, networkId, user, dust, hasWallet }`. */
+export const currentNetwork = state => state.networks.find(n => n.id === state.network);
+
 /** The display name of the selected network, from the engine state. */
-export const networkName = state => state.networks.find(n => n.id === state.network)?.name ?? state.network;
+export const networkName = state => currentNetwork(state)?.name ?? state.network;
+
+/** Whether the selected network has DUST (and so fees). */
+export const hasDust = state => currentNetwork(state)?.dust !== false;
 
 /** A sync percentage (0..100) cut to one decimal, never rounded up to a false 100. */
 export const percentText = value => `${(Math.floor(Math.max(0, Math.min(100, Number(value) || 0)) * 10) / 10).toFixed(1)}%`;

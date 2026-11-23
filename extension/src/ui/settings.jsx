@@ -1,15 +1,18 @@
 // Settings: the connection to the network, proving, locking, rescanning and
-// removing this network's wallet. Every network keeps its own values.
+// removing this network's wallet. Every network keeps its own values. A
+// network the user added shows its definition instead of the connection
+// fields: its endpoints are edited, and the network removed, in its form
+// (networks.jsx).
 import { useEffect, useState } from 'react';
 import { CheckCircleIcon, LockKeyIcon, TrashIcon } from '@phosphor-icons/react';
 import { Dialog } from '@cloudflare/kumo/components/dialog';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { useKumoToastManager } from '@cloudflare/kumo/components/toast';
-import { AddRow, ListCard, PasswordField, PrimaryButton, SecondaryButton, Section, TextField, Viewport } from './components.jsx';
+import { AddRow, DetailRow, ListCard, PasswordField, PrimaryButton, SecondaryButton, Section, TextField, Viewport } from './components.jsx';
 import { DEFAULT_PROOF_SERVER, NETWORKS } from '../../../wallet/networks.mjs';
 import { entryFor, withEntry } from './endpoints.js';
 import { ui } from './api.js';
-import { dateTime, networkName, withCommas } from './format.js';
+import { dateTime, networkName, shortHash, withCommas } from './format.js';
 
 const PROVERS = [
   { kind: 'wasm', title: 'In this browser (WASM)', hint: 'No extra software, slower' },
@@ -62,7 +65,24 @@ function RemoveDialog({ name }) {
   );
 }
 
-export function Settings({ state }) {
+/** A user network's definition, with Edit opening its form. */
+function UserNetwork({ definition, onEdit }) {
+  return (
+    <Section title="Network" gap="gap-3">
+      <ListCard>
+        <DetailRow label="Network id" mono>{definition.networkId}</DetailRow>
+        <DetailRow label="Indexer HTTP" mono>{definition.indexerHttp}</DetailRow>
+        <DetailRow label="Indexer WebSocket" mono>{definition.indexerWs}</DetailRow>
+        {definition.submitUrl ? <DetailRow label="Submit URL" mono>{definition.submitUrl}</DetailRow> : <DetailRow label="Node RPC" mono>{definition.node}</DetailRow>}
+        <DetailRow label="DUST">{definition.dust ? 'Yes' : 'No: no fees'}</DetailRow>
+        <DetailRow label="First block" mono>{shortHash(definition.genesisHash)}</DetailRow>
+      </ListCard>
+      <SecondaryButton className="w-full" onClick={onEdit}>Edit network</SecondaryButton>
+    </Section>
+  );
+}
+
+export function Settings({ state, onForm }) {
   const toasts = useKumoToastManager();
   const [settings, setSettings] = useState(null);
   const [values, setValues] = useState(null);
@@ -102,22 +122,24 @@ export function Settings({ state }) {
   return (
     <Viewport gap="gap-5">
       <h2 className="px-1 text-lg font-bold text-kumo-default">Settings</h2>
-      <Section title="Connection" gap="gap-3">
-        {!values ? <Loader /> : (
-          <>
-            <TextField label="Node RPC" mono value={values.node ?? ''} onChange={e => set({ node: e.target.value })} spellCheck={false} />
-            <TextField label="Indexer HTTP" mono value={values.indexerHttp ?? ''} onChange={e => set({ indexerHttp: e.target.value })} spellCheck={false} />
-            <TextField label="Indexer WebSocket" mono value={values.indexerWs ?? ''} onChange={e => set({ indexerWs: e.target.value })} spellCheck={false} />
-            {blockfrost && (
-              <PasswordField label="Blockfrost project id" mono autoComplete="off" value={values.projectId ?? ''}
-                onChange={e => set({ projectId: e.target.value })}
-                description="Preprod and Mainnet are served through Blockfrost. The project id stays on this device and is never shown to sites." />
-            )}
-            <SecondaryButton className="w-full" onClick={() => save(values, 'Saved')}>Save connection</SecondaryButton>
-            <SecondaryButton className="w-full" onClick={reset}>Reset to defaults</SecondaryButton>
-          </>
-        )}
-      </Section>
+      {settings?.definition.user ? <UserNetwork definition={settings.definition} onEdit={() => onForm('edit')} /> : (
+        <Section title="Connection" gap="gap-3">
+          {!values ? <Loader /> : (
+            <>
+              <TextField label="Node RPC" mono value={values.node ?? ''} onChange={e => set({ node: e.target.value })} spellCheck={false} />
+              <TextField label="Indexer HTTP" mono value={values.indexerHttp ?? ''} onChange={e => set({ indexerHttp: e.target.value })} spellCheck={false} />
+              <TextField label="Indexer WebSocket" mono value={values.indexerWs ?? ''} onChange={e => set({ indexerWs: e.target.value })} spellCheck={false} />
+              {blockfrost && (
+                <PasswordField label="Blockfrost project id" mono autoComplete="off" value={values.projectId ?? ''}
+                  onChange={e => set({ projectId: e.target.value })}
+                  description="Preprod and Mainnet are served through Blockfrost. The project id stays on this device and is never shown to sites." />
+              )}
+              <SecondaryButton className="w-full" onClick={() => save(values, 'Saved')}>Save connection</SecondaryButton>
+              <SecondaryButton className="w-full" onClick={reset}>Reset to defaults</SecondaryButton>
+            </>
+          )}
+        </Section>
+      )}
       <Section title="Proving" gap="gap-3">
         {!values ? <Loader /> : (
           <>

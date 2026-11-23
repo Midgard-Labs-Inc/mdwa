@@ -15,16 +15,18 @@ export function Mark({ size = 28 }) {
   );
 }
 
-// One color per network, used wherever the network is shown.
-export const NETWORK_LOOK = {
+// One color per built-in network, used wherever the network is shown; the
+// user's own networks are neutral.
+const NETWORK_LOOK = {
   mainnet: { badge: 'blue', dot: 'bg-kumo-badge-blue' },
   preprod: { badge: 'orange', dot: 'bg-kumo-badge-orange' },
   preview: { badge: 'purple', dot: 'bg-kumo-badge-purple' },
   undeployed: { badge: 'teal', dot: 'bg-kumo-badge-teal' },
 };
+export const networkLook = id => NETWORK_LOOK[id] ?? { badge: 'neutral', dot: 'bg-kumo-badge-neutral' };
 
 export function NetworkBadge({ network, name }) {
-  return <Badge variant={NETWORK_LOOK[network]?.badge ?? 'neutral'}>{name}</Badge>;
+  return <Badge variant={networkLook(network).badge}>{name}</Badge>;
 }
 
 /** `network` is the network badge or switcher shown next to the name. */

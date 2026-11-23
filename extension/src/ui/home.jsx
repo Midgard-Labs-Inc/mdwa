@@ -1,12 +1,13 @@
 // Home: balance, quick actions, the engine's busy strip, the DUST summary and
-// the unshielded and shielded asset lists. A custom token row opens its Token
+// the unshielded and shielded asset lists (on a network without DUST, nothing
+// of DUST is shown). A custom token row opens its Token
 // page (name it, or check it against its contract); "Add a token" at the
 // bottom of each list registers a token before any of it arrives.
 import { ArrowDownLeftIcon, ArrowUpRightIcon, CaretRightIcon, DropIcon } from '@phosphor-icons/react';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { AddRow, AssetRow, BigAmount, ListCard, Progress, QuickAction, Section, TokenAvatar, Viewport } from './components.jsx';
 import { SyncSummary } from './sync.jsx';
-import { NIGHT_TYPE, busyText, dust, isNight, night, ratio, shortType } from './format.js';
+import { NIGHT_TYPE, busyText, dust, hasDust, isNight, night, ratio, shortType } from './format.js';
 import { describeToken, tokenAmount, tokenLetters, tokenUnit, useTokenLabels } from './tokens.js';
 
 /** Shown while the engine balances, proves or submits something. */
@@ -76,13 +77,14 @@ export function Home({ state, overview, onOpen }) {
   const unshielded = [...(overview?.unshielded ?? [])].sort((a, b) => (b.type === NIGHT_TYPE) - (a.type === NIGHT_TYPE));
   const shielded = overview?.shielded ?? [];
   const labels = useTokenLabels(state.network);
+  const withDust = hasDust(state);
   return (
     <Viewport gap="gap-[18px]">
       {state.sync?.status !== 'synced' && <SyncSummary sync={state.sync} onClick={() => onOpen('sync')} />}
       <div className="flex flex-col items-center gap-1.5">
         <span className="text-xs font-medium text-kumo-subtle">Total balance</span>
         {overview ? <BigAmount value={overview.night?.available ?? '0'} /> : <Loader />}
-        {overview && (
+        {overview && withDust && (
           <span className="text-xs text-kumo-subtle tabular-nums">
             {dust(overview.dust.balance)} DUST available{overview.dust.updating ? ' · updating' : ''}
           </span>
@@ -95,12 +97,12 @@ export function Home({ state, overview, onOpen }) {
       <div className="flex justify-center gap-4">
         <QuickAction icon={ArrowDownLeftIcon} label="Receive" onClick={() => onOpen('receive')} />
         <QuickAction icon={ArrowUpRightIcon} label="Send" onClick={() => onOpen('send')} />
-        <QuickAction icon={DropIcon} label="DUST" onClick={() => onOpen('dust')} />
+        {withDust && <QuickAction icon={DropIcon} label="DUST" onClick={() => onOpen('dust')} />}
       </div>
       {state.busy && <BusyStrip busy={state.busy} />}
       {overview && (
         <>
-          <Section title="DUST"><DustCard dust={overview.dust} onOpen={() => onOpen('dust')} /></Section>
+          {withDust && <Section title="DUST"><DustCard dust={overview.dust} onOpen={() => onOpen('dust')} /></Section>}
           <AssetList title="Unshielded" kind="unshielded" assets={unshielded} labels={labels} onOpen={onOpen} />
           <AssetList title="Shielded" kind="shielded" assets={shielded} labels={labels} onOpen={onOpen} />
         </>

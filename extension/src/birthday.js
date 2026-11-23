@@ -147,13 +147,13 @@ export async function zswapCollapsedUpdate(indexerHttp, mtIndex) {
   return { bytes: hexBytes(update.update), protocolVersion: BigInt(update.protocolVersion) };
 }
 
-// What the wallet's sync asks the indexer for, by GraphQL root type. The
+// What the wallet's sync asks the indexer for, by GraphQL root type: the
+// shielded and unshielded sync, and the DUST sync where there is DUST (on a
+// network without it, the stand-in DUST wallet asks nothing). The
 // shielded collapsed update is only needed for a birthday and is checked
 // where it is used.
-const REQUIRED = {
-  Query: ['block', 'dustCommitmentMerkleTreeUpdate'],
-  Subscription: ['zswapLedgerEvents', 'unshieldedTransactions', 'dustGenerations', 'dustNullifierTransactions'],
-};
+const REQUIRED = { Query: ['block'], Subscription: ['zswapLedgerEvents', 'unshieldedTransactions'] };
+const DUST_REQUIRED = { Query: ['dustCommitmentMerkleTreeUpdate'], Subscription: ['dustGenerations', 'dustNullifierTransactions'] };
 
 /**
  * The queries the wallet's sync needs that the indexer says it does not
@@ -161,16 +161,17 @@ const REQUIRED = {
  * them all, null when it does not say (introspection off or failing). The
  * SDK retries a failing query forever without reporting it, so this is how a
  * third-party indexer that lacks one becomes a readable error instead of a
- * sync that never ends.
+ * sync that never ends. Without `dust`, the DUST queries are not needed.
  */
-export async function missingQueries(indexerHttp) {
+export async function missingQueries(indexerHttp, { dust = true } = {}) {
   let data;
   try {
     data = await gql(indexerHttp, '{ q: __type(name: "Query") { fields { name } } s: __type(name: "Subscription") { fields { name } } }');
   } catch { return null; }
   const offered = { Query: data?.q?.fields?.map(f => f.name), Subscription: data?.s?.fields?.map(f => f.name) };
   if (!offered.Query || !offered.Subscription) return null;
-  return Object.entries(REQUIRED).flatMap(([root, names]) => names.filter(n => !offered[root].includes(n)).map(n => `${root}.${n}`));
+  return Object.entries(REQUIRED).flatMap(([root, names]) => [...names, ...(dust ? DUST_REQUIRED[root] : [])]
+    .filter(n => !offered[root].includes(n)).map(n => `${root}.${n}`));
 }
 
 const hexBytes = text => Uint8Array.from(String(text).match(/../g) ?? [], b => parseInt(b, 16));

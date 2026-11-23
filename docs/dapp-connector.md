@@ -15,6 +15,7 @@ wallet, see the [technical overview](technical.md).
 - [Methods](#methods)
 - [Approval windows](#approval-windows)
 - [getProvingProvider](#getprovingprovider)
+- [On your own networks](#on-your-own-networks)
 - [Errors](#errors)
 - [Limits](#limits)
 - [The local test dApp](#the-local-test-dapp)
@@ -80,7 +81,8 @@ sequenceDiagram
 ## Connecting
 
 `connect(networkId)` succeeds only when mdwa's selected network has a wallet
-and its network id is the one asked for. Otherwise it fails with
+and its network id is the one asked for (for a network you defined, the
+network id in its definition). Otherwise it fails with
 `InvalidRequest` (a message naming mdwa's network, so the dApp can ask the user
 to switch) or `InternalError` (no wallet on that network).
 
@@ -261,6 +263,21 @@ sequenceDiagram
 - **Free of a window.** A call is not asked about, but it is limited: only a
   connected page may upload, and while a proof runs the popup shows the wallet
   busy.
+
+## On your own networks
+
+On a network you defined (see [Your own networks](technical.md#your-own-networks))
+the API is the same, with these differences:
+
+- **`getConfiguration`** reports the definition's indexer URLs, and as
+  `substrateNodeUri` its node or, for a network whose transactions go to an
+  HTTP endpoint, its submit URL: the API requires a string there.
+- **`submitTransaction`** submits as the definition says: to the node, or by
+  POST to the submit URL.
+- **Without DUST**, `makeTransfer`, `makeIntent` and both balancing methods never
+  pay a fee, whatever `payFees` says, and the windows show no fee.
+  `getDustBalance` answers a zero balance and cap, and `getDustAddress` still
+  answers the DUST address the seed derives, so the API's shape does not change.
 
 ## Errors
 

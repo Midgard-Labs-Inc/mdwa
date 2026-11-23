@@ -1,11 +1,23 @@
-// The networks the wallet supports. Each one has its own wallet (recovery
-// phrase, password, database, dApp approvals); nothing is shared.
+// The networks the wallet supports: four built in, and those the user adds.
+// Each one has its own wallet (recovery phrase, password, database, dApp
+// approvals); nothing is shared.
 //
-// Endpoints are defaults: every one is editable per network in Settings.
-// Blockfrost hosts Mainnet and Preprod and wants a project id, which the user
-// types in Settings and which is appended as `?project_id=` to all three URLs
-// at connection time only. The id is a credential: it is never stored inside
-// a URL and never handed to a dApp (see publicEndpoints).
+// A network is read through an indexer (HTTP and WebSocket) and takes
+// transactions either through a Midnight node (`node`, WebSocket RPC: the
+// SDK's own submission) or through an HTTP endpoint (`submitUrl`, see
+// extension/src/custom.js). It has DUST unless its definition says
+// `dust: false`, in which case nothing pays a fee there.
+//
+// The built-in endpoints are defaults: every one is editable per network in
+// Settings. Blockfrost hosts Mainnet and Preprod and wants a project id,
+// which the user types in Settings and which is appended as `?project_id=` to
+// all three URLs at connection time only. The id is a credential: it is
+// never stored inside a URL and never handed to a dApp (see publicEndpoints).
+//
+// A network the user adds is stored in the settings (`networks`, by a key of
+// its own, see userNetworkKey) with its endpoints in its definition: editing
+// the network edits them. Only its prover is a setting, as on the built-in
+// ones.
 export const NETWORKS = {
   mainnet: {
     name: 'Mainnet', networkId: 'mainnet', blockfrost: true,
@@ -33,7 +45,6 @@ export const NETWORKS = {
   },
 };
 
-export const NETWORK_IDS = Object.keys(NETWORKS);
 export const DEFAULT_NETWORK = 'preview';
 export const DEFAULT_PROOF_SERVER = 'http://localhost:6300';
 
@@ -43,37 +54,63 @@ export const NIGHT_TOKEN = '0'.repeat(64);
 export const NIGHT_DECIMALS = 6;
 export const DUST_DECIMALS = 15;
 
-export function network(id) {
-  const n = NETWORKS[id];
+/** The definition of network `id`, built in or one of the user's
+ *  (`userNetworks`, the settings' `networks`), with its id, `user` and `dust` set. */
+export function network(id, userNetworks = {}) {
+  const builtIn = Object.hasOwn(NETWORKS, id);
+  const n = builtIn ? NETWORKS[id] : Object.hasOwn(userNetworks, id) ? userNetworks[id] : null;
   if (!n) throw new Error(`Unknown network ${id}`);
-  return n;
+  return { dust: true, ...n, id, user: !builtIn };
 }
 
-/** The endpoints a network starts with, before the user edits any. */
-export function defaultEndpoints(id) {
-  const n = network(id);
-  return {
-    node: n.node, indexerHttp: n.indexerHttp, indexerWs: n.indexerWs, projectId: '',
-    prover: { kind: 'wasm', url: DEFAULT_PROOF_SERVER },
-  };
+/** Every network id: the built-in ones first, then the user's. */
+export const networkIds = (userNetworks = {}) => [...Object.keys(NETWORKS), ...Object.keys(userNetworks)];
+
+/** A fresh key for a network the user adds. It never equals a built-in id or
+ *  a network id, since two user networks may share a network id (two local
+ *  chains are both `undeployed`) and the key names the network's database. */
+export const userNetworkKey = () => `user-${Array.from(crypto.getRandomValues(new Uint8Array(6)), b => b.toString(16).padStart(2, '0')).join('')}`;
+
+/**
+ * Why the extension cannot reach `url`, or null when it can. The page policy
+ * (extension/manifest.json, connect-src) allows any https: and wss: origin,
+ * and http: and ws: only on localhost and 127.0.0.1. Hosts a user types
+ * cannot be added to it at build time, so an endpoint outside it is refused
+ * where it is entered rather than failing at every connection.
+ */
+export function policyBlocks(url) {
+  const u = new URL(url);
+  if (u.protocol === 'https:' || u.protocol === 'wss:') return null;
+  if ((u.protocol === 'http:' || u.protocol === 'ws:') && (u.hostname === 'localhost' || u.hostname === '127.0.0.1')) return null;
+  return `The extension may connect to https and wss endpoints, and to http and ws only on localhost and 127.0.0.1: ${u.origin} would be blocked`;
 }
 
-/** Stored endpoints merged over the defaults, so a partial record still works. */
-export function endpointsOf(id, stored) {
-  const d = defaultEndpoints(id);
-  const s = stored ?? {};
+/** Where network `n` (a definition) takes transactions: `{ node }` or `{ submitUrl }`. */
+const submission = (n, url = key => n[key]) => (n.submitUrl ? { submitUrl: url('submitUrl') } : { node: url('node') });
+
+/** The endpoints network `n` starts with, before the user edits any. */
+export function defaultEndpoints(n) {
+  return { ...submission(n), indexerHttp: n.indexerHttp, indexerWs: n.indexerWs, projectId: '', prover: { kind: 'wasm', url: DEFAULT_PROOF_SERVER } };
+}
+
+/** Stored endpoints merged over the defaults, so a partial record still
+ *  works. A user network's endpoints are its definition: only its prover is
+ *  read from the stored record. */
+export function endpointsOf(n, stored) {
+  const d = defaultEndpoints(n);
+  const s = (n.user ? { prover: stored?.prover } : stored) ?? {};
+  const pick = key => s[key] || d[key];
   return {
-    node: s.node || d.node, indexerHttp: s.indexerHttp || d.indexerHttp, indexerWs: s.indexerWs || d.indexerWs,
+    ...submission(n, pick), indexerHttp: pick('indexerHttp'), indexerWs: pick('indexerWs'),
     projectId: (s.projectId ?? '').trim(),
     prover: { kind: s.prover?.kind === 'server' ? 'server' : 'wasm', url: s.prover?.url || d.prover.url },
   };
 }
 
-/** The URLs to connect with: the Blockfrost project id goes onto all three.
+/** The URLs to connect with: the Blockfrost project id goes onto every one.
  *  Throws the message the sync status shows when a Blockfrost network has no id. */
-export function connectionUrls(id, endpoints) {
-  const n = network(id);
-  const e = endpointsOf(id, endpoints);
+export function connectionUrls(n, endpoints) {
+  const e = endpointsOf(n, endpoints);
   if (n.blockfrost && !e.projectId) throw new Error('Add a Blockfrost project id in Settings');
   const withId = url => {
     if (!e.projectId) return url;
@@ -81,11 +118,33 @@ export function connectionUrls(id, endpoints) {
     u.searchParams.set('project_id', e.projectId);
     return u.toString();
   };
-  return { node: withId(e.node), indexerHttp: withId(e.indexerHttp), indexerWs: withId(e.indexerWs), prover: e.prover };
+  return { ...submission(n, key => withId(e[key])), indexerHttp: withId(e.indexerHttp), indexerWs: withId(e.indexerWs), prover: e.prover };
 }
 
-/** What a dApp may see of the endpoints: the base URLs, never the project id. */
-export function publicEndpoints(id, endpoints) {
-  const e = endpointsOf(id, endpoints);
-  return { node: e.node, indexerHttp: e.indexerHttp, indexerWs: e.indexerWs, prover: e.prover };
+/** Network `n`'s endpoints with `entry` applied, checked: each a URL of the
+ *  right scheme, and for a user network one the page policy lets the engine
+ *  reach (policyBlocks). */
+export function checkedEndpoints(n, entry) {
+  const e = endpointsOf(n, entry);
+  for (const key of [e.submitUrl ? 'submitUrl' : 'node', 'indexerHttp', 'indexerWs']) {
+    let u;
+    try { u = new URL(e[key]); } catch { throw new Error(`${n.name}: ${key} is not a URL`); }
+    const ok = key === 'node' || key === 'indexerWs' ? /^wss?:$/.test(u.protocol) : /^https?:$/.test(u.protocol);
+    if (!ok) throw new Error(`${n.name}: ${key} has the wrong scheme (${u.protocol})`);
+    const blocked = n.user && policyBlocks(e[key]);
+    if (blocked) throw new Error(`${n.name}: ${blocked}`);
+  }
+  if (e.prover.kind === 'server') {
+    try { if (!/^https?:$/.test(new URL(e.prover.url).protocol)) throw new Error(); }
+    catch { throw new Error(`${n.name}: the proof server URL must be http or https`); }
+  }
+  return e;
+}
+
+/** What a dApp may see of the endpoints: the base URLs, never the project id.
+ *  A network that takes transactions over HTTP reports its submit URL as the
+ *  node, the one string the connector API has for where transactions go. */
+export function publicEndpoints(n, endpoints) {
+  const e = endpointsOf(n, endpoints);
+  return { node: e.node ?? e.submitUrl, indexerHttp: e.indexerHttp, indexerWs: e.indexerWs, prover: e.prover };
 }

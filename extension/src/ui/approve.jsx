@@ -16,7 +16,8 @@
 //
 // Tokens are named as in the popup (tokens.js): NIGHT and DUST by their
 // fixed names, a custom token by the label the user saved for it on this
-// network, with its decimals.
+// network, with its decimals. On a network without DUST there is no fee, so
+// no fee line.
 import './theme.js';
 import { ensureCurrentBuild } from './fresh.js';
 import { useEffect, useState } from 'react';
@@ -118,7 +119,7 @@ const Pre = ({ children }) => (
 );
 
 /** The wallet's side of a balanced transaction: token changes and the DUST fee. */
-function Effect({ described, payFees, labels }) {
+function Effect({ described, payFees, labels, dustFee }) {
   if (!described) {
     return <Banner variant="error" icon={<WarningCircleIcon />} title="Cannot describe this transaction" description="The wallet could not work out what it does. Only approve it if you trust this site." />;
   }
@@ -129,10 +130,12 @@ function Effect({ described, payFees, labels }) {
       <LayerCard.Primary className="flex flex-col divide-y divide-kumo-hairline">
         {deltas.filter(d => d.kind !== 'dust').map(d => <TokenLine key={`${d.kind}.${d.type}`} item={d} labels={labels} sign="+" />)}
         {!deltas.some(d => d.kind !== 'dust') && <Row label="Tokens"><Text variant="secondary" size="sm">No change</Text></Row>}
-        <Row label="Network fee">
-          {payFees === false ? <Text variant="secondary" size="sm">Not paid by this wallet</Text> : `${dustText(described.fee)} DUST`}
-        </Row>
-        {payFees !== false && described.estimatedFee && described.estimatedFee !== described.fee && (
+        {dustFee && (
+          <Row label="Network fee">
+            {payFees === false ? <Text variant="secondary" size="sm">Not paid by this wallet</Text> : `${dustText(described.fee)} DUST`}
+          </Row>
+        )}
+        {dustFee && payFees !== false && described.estimatedFee && described.estimatedFee !== described.fee && (
           <Row label="Estimated fee">{`${dustText(described.estimatedFee)} DUST`}</Row>
         )}
       </LayerCard.Primary>
@@ -245,6 +248,7 @@ const COPY = {
 
 function Body({ request, networkLabel, state, labels }) {
   const { kind, params } = request;
+  const dustFee = state.networks.find(n => n.id === params.network)?.dust !== false;
   if (params.error) {
     return <Banner variant="error" icon={<WarningCircleIcon />} title="The wallet cannot do this" description={params.error} />;
   }
@@ -284,7 +288,7 @@ function Body({ request, networkLabel, state, labels }) {
       return (
         <>
           <Contracts described={params.described} />
-          <Effect described={params.described} payFees={params.payFees} labels={labels} />
+          <Effect described={params.described} payFees={params.payFees} labels={labels} dustFee={dustFee} />
           <Details described={params.described} />
           <Collapsed title={`Transaction from the site (${params.stage}, hex)`}><Pre>{params.tx}</Pre></Collapsed>
         </>
@@ -293,7 +297,7 @@ function Body({ request, networkLabel, state, labels }) {
       return (
         <>
           <Outputs title="This wallet will send" outputs={params.outputs} labels={labels} />
-          <Effect described={params.described} payFees={params.payFees} labels={labels} />
+          <Effect described={params.described} payFees={params.payFees} labels={labels} dustFee={dustFee} />
           <Details described={params.described} />
         </>
       );
@@ -302,7 +306,7 @@ function Body({ request, networkLabel, state, labels }) {
         <>
           {params.inputs.length > 0 && <Outputs title="You give" outputs={params.inputs} labels={labels} />}
           {params.outputs.length > 0 && <Outputs title="You ask for" outputs={params.outputs} labels={labels} />}
-          {params.described && <Effect described={params.described} payFees={params.payFees} labels={labels} />}
+          {params.described && <Effect described={params.described} payFees={params.payFees} labels={labels} dustFee={dustFee} />}
           <Details described={params.described} />
         </>
       );
@@ -315,7 +319,7 @@ function Body({ request, networkLabel, state, labels }) {
           </LayerCard.Secondary>
           <LayerCard.Primary className="flex flex-col gap-2">
             <Payload data={params.data} encoding={params.encoding} />
-            <Text variant="secondary" size="xs">Signing proves you control this wallet. It does not move any funds.</Text>
+            <Text variant="secondary" size="xs">The site gets a signature by this wallet's key, which another program may accept as your consent, even to move funds. Sign only what you expect from this site.</Text>
           </LayerCard.Primary>
         </LayerCard>
       );

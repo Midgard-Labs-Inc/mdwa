@@ -16,6 +16,8 @@
 // (blobPut), are checked against the SHA-256 digest the page computed, and
 // are kept per site in a size-bounded cache. Preimages carry the user's
 // private inputs: they are never logged or stored, only handed to the prover.
+//
+// On a network without DUST nothing pays a fee, whatever a site asks.
 import { firstValueFrom, filter, timeout } from 'rxjs';
 import { ShieldedCoinPublicKey, ShieldedEncryptionPublicKey, isInsufficientDustForFeeError } from '@midnightntwrk/wallet-sdk';
 import { publicEndpoints } from '../../wallet/networks.mjs';
@@ -74,7 +76,8 @@ const decimals = record => Object.fromEntries(Object.entries(record ?? {}).map((
 
 /**
  * The connector table. `engine` gives what the engine worker owns:
- * `context()` ({ network, networkId, name }), `live()`, `storedWallet()`,
+ * `context()` (the selected network's definition, with `network` its id),
+ * `live()`, `storedWallet()`,
  * `endpointsFor(network)`, `withBusy` and `releaseBusy`, `keepPreview`,
  * `takePreview`, `dropPreview`, `noteTransaction`, `txMeta()`, and `state`
  * with `publish()` for the busy indicator.
@@ -261,13 +264,15 @@ export function makeConnector(engine) {
     return bytesOf(origin, params.preimage, 'preimage');
   };
 
+  const paysFees = payFees => payFees && context().dust;
+
   // -------------------------------------------------------------- table ---
   return {
     getConfiguration: async () => {
-      const { network, networkId } = context();
-      const e = publicEndpoints(network, await endpointsFor(network));
+      const n = context();
+      const e = publicEndpoints(n, await endpointsFor(n.network));
       return {
-        indexerUri: e.indexerHttp, indexerWsUri: e.indexerWs, substrateNodeUri: e.node, networkId,
+        indexerUri: e.indexerHttp, indexerWsUri: e.indexerWs, substrateNodeUri: e.node, networkId: n.networkId,
         // Deprecated in the API, but some dApps still read it: reported while
         // the user proves with a proof server.
         ...(e.prover.kind === 'server' ? { proverServerUri: e.prover.url } : {}),
@@ -335,7 +340,7 @@ export function makeConnector(engine) {
       const sealed = stage === 'sealed';
       return prepare(origin, 'balance', ticket, async wallet => {
         const handle = invalid(() => wallet.facade.adoptTransaction(unhex(tx), sealed ? 'Finalized' : 'Unbound'));
-        const options = { ttl: new Date(Date.now() + TTL_MS), tokenKindsToBalance: payFees ? 'all' : ['shielded', 'unshielded'] };
+        const options = { ttl: new Date(Date.now() + TTL_MS), tokenKindsToBalance: paysFees(payFees) ? 'all' : ['shielded', 'unshielded'] };
         const recipe = sealed
           ? await wallet.facade.balanceFinalizedTransaction(handle, options)
           : await wallet.facade.balanceUnboundTransaction(handle, options);
@@ -351,7 +356,7 @@ export function makeConnector(engine) {
       });
       invalid(() => midnight.transfersOf(networkId, list));
       return prepare(origin, 'transfer', ticket, async wallet => {
-        const built = await midnight.buildTransfer(wallet, list, { payFees });
+        const built = await midnight.buildTransfer(wallet, list, { payFees: paysFees(payFees) });
         return { recipe: built.recipe, shown: { outputs: built.outputs } };
       });
     },
@@ -381,7 +386,7 @@ export function makeConnector(engine) {
       const list = outputs.map(o => ({ kind: o?.kind, type: o?.type, amount: o?.value, recipient: o?.recipient }));
       const { transfers, described } = list.length ? invalid(() => midnight.transfersOf(networkId, list)) : { transfers: [], described: [] };
       return prepare(origin, 'offer', ticket, async wallet => {
-        const recipe = await wallet.facade.initSwap(swapInputs, transfers, { ttl: new Date(Date.now() + TTL_MS), payFees });
+        const recipe = await wallet.facade.initSwap(swapInputs, transfers, { ttl: new Date(Date.now() + TTL_MS), payFees: paysFees(payFees) });
         return { recipe, shown: { inputs: shownInputs, outputs: described } };
       });
     },
