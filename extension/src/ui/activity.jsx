@@ -85,7 +85,7 @@ function deltaLines(deltas, labels) {
   });
 }
 
-/** `refresh` changes when the list may have: a new block, a sync state, the wallet's own work. */
+/** `refresh` changes when the list may have: a new block, a sync state, what the wallets applied, the wallet's own work. */
 export function Activity({ network, refresh, onOpen }) {
   const labels = useTokenLabels(network);
   const [page, setPage] = useState(1);

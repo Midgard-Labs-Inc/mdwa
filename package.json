@@ -9,6 +9,7 @@
     "smoke": "node scripts/smoke.mjs",
     "check:custom": "node scripts/custom-check.mjs",
     "check:birthday": "node scripts/birthday-check.mjs",
+    "check:rewind": "node scripts/rewind-check.mjs",
     "check:browser": "node scripts/build-extension.mjs && node scripts/browser-check.mjs",
     "dapp": "node dapp/serve.mjs",
     "dapp:contract": "node dapp/compile.mjs",
@@ -38,7 +39,8 @@
     "@tailwindcss/cli": "^4.3.3",
     "esbuild": "0.28.1",
     "puppeteer-core": "25.18.1",
-    "tailwindcss": "^4.3.3"
+    "tailwindcss": "^4.3.3",
+    "ws": "^8.23.0"
   },
   "license": "Apache-2.0"
 }

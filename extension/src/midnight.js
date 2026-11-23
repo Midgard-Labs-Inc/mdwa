@@ -6,7 +6,8 @@
 // engine's JSON (decimal strings, hex, Bech32m). The wallets are the SDK's,
 // composed from its public exports for a faster first sync: DUST on the
 // SDK's projections sync, and the shielded wallet started at the wallet
-// birthday (see "fast sync" below and birthday.js).
+// birthday (see "fast sync" below and birthday.js), with sync that stops on
+// an indexer's notice that it dropped blocks (see "rewind" below).
 //
 // A network without DUST, or one that takes transactions over HTTP, gets
 // custom.js's stand-in DUST wallet or submission service instead.
@@ -14,11 +15,13 @@
 // It has no storage and no messaging, so the same code runs in the extension's
 // engine worker and under Node (scripts/smoke.mjs).
 import {
-  InMemoryTransactionHistoryStorage, MidnightBech32m, PublicKey, ShieldedAddress, ShieldedWallet, Token,
-  UnshieldedAddress, UnshieldedWallet, DustAddress, WalletEntrySchema, WalletFacade, WalletSeeds, createKeystore,
+  InMemoryTransactionHistoryStorage, MidnightBech32m, PublicKey, ShieldedAddress, Token,
+  UnshieldedAddress, DustAddress, WalletEntrySchema, WalletFacade, WalletSeeds, createKeystore,
   ShieldedCoinPublicKey, ShieldedEncryptionPublicKey, generateMnemonicWords, isInsufficientDustForFeeError,
   lifecycleTransactionTraits, mergeWalletEntries, validateMnemonic, ProtocolVersion,
+  CustomForkingShieldedWallet, CustomForkingUnshieldedWallet,
 } from '@midnightntwrk/wallet-sdk';
+import { makeIndexerChainVersionProbe } from '@midnightntwrk/wallet-sdk/capabilities';
 import { TransactionLifecycleServiceImpl } from '@midnightntwrk/wallet-sdk/capabilities/transactionLifecycle';
 import {
   fromV8ProvingProvider, fromV9ProvingProvider, makeVersionedProvingServiceEffect, wrapVersionedEffectService,
@@ -27,9 +30,15 @@ import { WasmProver } from '@midnightntwrk/wallet-sdk/prover-client/effect';
 import { CustomForkingDustWallet, dustVariantConfigurations, dustWalletProbes } from '@midnightntwrk/wallet-sdk/dust';
 import { V1Builder as DustV1Builder } from '@midnightntwrk/wallet-sdk/dust/v1';
 import { V2Builder as DustV2Builder, SyncService as DustSyncService } from '@midnightntwrk/wallet-sdk/dust/v2';
-import { CoreWallet as ShieldedCoreV1 } from '@midnightntwrk/wallet-sdk/shielded/v1';
-import { CoreWallet as ShieldedCoreV2 } from '@midnightntwrk/wallet-sdk/shielded/v2';
-import { Effect, Option } from 'effect';
+import { CoreWallet as ShieldedCoreV1, V1Builder as ShieldedV1Builder } from '@midnightntwrk/wallet-sdk/shielded/v1';
+import {
+  CoreWallet as ShieldedCoreV2, Migration as ShieldedMigration, Sync as ShieldedSync, V2Builder as ShieldedV2Builder,
+} from '@midnightntwrk/wallet-sdk/shielded/v2';
+import { V1Builder as UnshieldedV1Builder } from '@midnightntwrk/wallet-sdk/unshielded/v1';
+import {
+  Migration as UnshieldedMigration, Sync as UnshieldedSync, V2Builder as UnshieldedV2Builder,
+} from '@midnightntwrk/wallet-sdk/unshielded/v2';
+import { Effect, Option, Stream } from 'effect';
 import * as ledger from '@midnightntwrk/ledger-v9';
 import * as ledgerV8 from '@midnightntwrk/ledger-v8';
 import { mnemonicToSeed } from '@scure/bip39';
@@ -259,6 +268,66 @@ export async function refreshDust(wallet) {
   try { await wallet.facade.dust.stepSync(keys); } catch { /* the next pass catches up */ } finally { keys.v8.clear(); keys.v9.clear(); }
 }
 
+// ---------------------------------------------------------------- rewind ---
+// Some indexers show blocks before they are permanent, and can drop them:
+// the blocks may come back later, and the transaction ids and event ids after
+// the last permanent block are numbered anew. Such an indexer ends every open
+// subscription with a GraphQL error whose `extensions.code` is CHAIN_REWOUND,
+// and answers it again to a subscription resumed from an id it no longer
+// knows. The SDK's sync streams retry a failed subscription from the same id
+// for ever, so the wallet would keep the dropped coins and never sync again;
+// the code is only visible on the error those streams fail with (the SDK's
+// ClientError keeps the GraphQL errors as its cause). So the wallets are the
+// SDK's, composed as its own UnshieldedWallet and ShieldedWallet are, with
+// their sync services wrapped: on CHAIN_REWOUND the stream stops quietly and
+// `onRewound` is called, for the engine to discard the synced state and sync
+// again (engine-worker.js). Any other failure goes on to the SDK's retry.
+const CHAIN_REWOUND = 'CHAIN_REWOUND';
+
+/** Whether a sync stream's failure is the indexer's CHAIN_REWOUND. */
+export function isChainRewound(error) {
+  for (let e = error, depth = 0; e && depth < 8; e = e.cause, depth++) {
+    if (Array.isArray(e)) return e.some(x => x?.extensions?.code === CHAIN_REWOUND);
+  }
+  return false;
+}
+
+/** A sync service factory whose updates stop, and call `onRewound`, on CHAIN_REWOUND. */
+export const rewindAware = (makeService, onRewound) => (...args) => {
+  const service = makeService(...args);
+  return {
+    ...service,
+    updates: (...state) => service.updates(...state).pipe(Stream.catchAll(error => {
+      if (!isChainRewound(error)) return Stream.fail(error);
+      onRewound();
+      return Stream.never;
+    })),
+  };
+};
+
+const unshieldedWallet = (configuration, onRewound) => CustomForkingUnshieldedWallet(
+  { ...configuration, chainVersionProbe: configuration.chainVersionProbe ?? makeIndexerChainVersionProbe(configuration) },
+  { builder: new UnshieldedV1Builder().withDefaults(), configuration },
+  {
+    builder: new UnshieldedV2Builder().withDefaults()
+      .withSync(rewindAware(UnshieldedSync.makeDefaultSyncService, onRewound), UnshieldedSync.makeDefaultSyncCapability)
+      .withMigration(() => UnshieldedMigration.makeCrossLedgerMigration()),
+    configuration,
+  },
+);
+
+// withSync drops the start material withDefaults set up, as for DUST below.
+const shieldedWallet = (configuration, onRewound) => CustomForkingShieldedWallet(
+  { ...configuration, chainVersionProbe: configuration.chainVersionProbe ?? makeIndexerChainVersionProbe(configuration) },
+  { builder: new ShieldedV1Builder().withDefaults(), configuration },
+  {
+    builder: new ShieldedV2Builder().withDefaults()
+      .withSync(rewindAware(ShieldedSync.makeEventsSyncService, onRewound), ShieldedSync.makeEventsSyncCapability)
+      .withStartAuxDefaults().withMigration(() => ShieldedMigration.makeCrossLedgerMigration()),
+    configuration,
+  },
+);
+
 /** The protocol version of the chain's tip block, for the DUST wallet's start. */
 const tipVersionProbe = indexerHttp => async () => {
   const data = await gql(indexerHttp, '{ block { protocolVersion } }');
@@ -292,7 +361,7 @@ const tipVersionProbe = indexerHttp => async () => {
  * still on ledger 8, or for a snapshot written there, and hands over to the
  * ledger-9 variant at the fork as the SDK's own DustWallet does.
  */
-function FastDustWallet(config) {
+function FastDustWallet(config, onRewound) {
   const configuration = {
     ...config,
     backgroundSyncInterval: DUST_PASS_INTERVAL_MS,
@@ -306,7 +375,7 @@ function FastDustWallet(config) {
       // withSync drops the start material withDefaults set up, so it is set
       // up again after it.
       builder: new DustV2Builder().withDefaults()
-        .withSync(DustSyncService.makeEventLessSyncService, DustSyncService.makeEventLessSyncCapability)
+        .withSync(rewindAware(DustSyncService.makeEventLessSyncService, onRewound), DustSyncService.makeEventLessSyncCapability)
         .withStartAuxDefaults().withMigration(migration),
       configuration: v2,
     },
@@ -314,7 +383,7 @@ function FastDustWallet(config) {
 }
 
 /**
- * A shielded wallet (the SDK's ShieldedWallet class `Shielded`) that starts
+ * A shielded wallet (a shielded wallet class `Shielded`, see shieldedWallet) that starts
  * at a birthday anchor (birthday.js shieldedAnchor) instead of the chain's
  * first event: an empty state of the variant the anchor's ledger version
  * belongs to, fast-forwarded by the indexer's collapsed update of the zswap
@@ -356,8 +425,11 @@ function startShieldedAtAnchor(Shielded, config, seeds, anchor, update) {
  * the indexer cannot place it (no anchor query, no collapsed update, an
  * inconsistent answer), the shielded wallet starts at the beginning of the
  * chain instead, and `shieldedStart.reason` says why.
+ *
+ * `onRewound` is called when the indexer answers a wallet's sync with
+ * CHAIN_REWOUND (see "rewind" above); that wallet's sync then stops.
  */
-export async function openWallet({ net, endpoints, seed, snapshot = null, birthday = null }) {
+export async function openWallet({ net, endpoints, seed, snapshot = null, birthday = null, onRewound = () => {} }) {
   const { networkId } = net;
   const urls = connectionUrls(net, endpoints);
   const seeds = WalletSeeds.fromMasterSeed(seed);
@@ -398,11 +470,12 @@ export async function openWallet({ net, endpoints, seed, snapshot = null, birthd
   };
   const facade = await WalletFacade.init({
     configuration,
-    shielded: config => restoreOr(ShieldedWallet(config), 'shielded', () => freshShielded(ShieldedWallet(config), config)),
-    unshielded: config => restoreOr(UnshieldedWallet(config), 'unshielded',
-      () => UnshieldedWallet(config).startWithPublicKey(PublicKey.fromKeyStore(keystore))),
+    shielded: config => restoreOr(shieldedWallet(config, onRewound), 'shielded',
+      () => freshShielded(shieldedWallet(config, onRewound), config)),
+    unshielded: config => restoreOr(unshieldedWallet(config, onRewound), 'unshielded',
+      () => unshieldedWallet(config, onRewound).startWithPublicKey(PublicKey.fromKeyStore(keystore))),
     dust: config => (!net.dust ? noDustWallet(config, seeds.dust)
-      : restoreOr(FastDustWallet(config), 'dust', () => FastDustWallet(config).startWithSeed(seeds.dust))),
+      : restoreOr(FastDustWallet(config, onRewound), 'dust', () => FastDustWallet(config, onRewound).startWithSeed(seeds.dust))),
     ...(urls.submitUrl ? { submissionService: () => submissionService(urls.submitUrl) } : {}),
     ...(configuration.provers ? { provingService: config => wasmProvingService(config.forks) } : {}),
     ...(resume?.lifecycle ? {
@@ -459,6 +532,14 @@ export function syncOf(s, { dust = true } = {}) {
   // blocks while another still connects (seen on Preview): progress counts
   // as syncing.
   return { status: synced ? 'synced' : connected || percent > 0 ? 'syncing' : 'connecting', percent, parts };
+}
+
+/** A key that changes whenever a wallet applies something from the chain or
+ *  books coins, while the sync status and percentage can stay as they were:
+ *  what the popup re-reads balances and activity on. */
+export function appliedOf(s) {
+  const progress = [s.shielded.progress.appliedIndex, s.unshielded.progress.appliedId, s.dust.progress.appliedIndex];
+  return [...progress, s.shielded.pendingCoins.length, s.unshielded.pendingCoins.length].join(':');
 }
 
 /** Whether a facade state is synced but for a DUST pass that is running:

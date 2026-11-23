@@ -157,6 +157,9 @@ widened.
   (`block(offset: { height: 0 }) { hash }`) and stores it. Every start, and
   every edit, reads it again: another chain behind the same URLs is refused
   with a message saying so, and the wallet does not retry.
+- **An indexer that rewinds.** A network whose indexer shows blocks before they
+  are permanent, and can drop them, is handled without any setting: see
+  [An indexer that rewinds](#an-indexer-that-rewinds).
 
 ```mermaid
 flowchart LR
@@ -269,6 +272,38 @@ sequenceDiagram
   doubling up to 60 seconds. The status shows the error in the meantime. An
   indexer that says (through GraphQL introspection) that it lacks a query the
   sync needs is named in the status, and the wallet does not retry.
+
+### An indexer that rewinds
+
+Some indexers show blocks before they are permanent. Such an indexer can
+drop its newest blocks (when the network's producer fails before they are
+made permanent, or when the indexer restarts); they may come back later, and
+the transaction ids and event ids after its last permanent block are then
+numbered anew. It says so with a GraphQL error whose `extensions.code` is
+`CHAIN_REWOUND`: every open subscription ends with it, and a subscription
+resumed from an id the indexer no longer knows gets it again.
+
+- **Without handling,** the SDK's sync streams retry the failed subscription
+  from the same id for ever (backing off to two minutes): the wallet stays
+  "catching up" and keeps the dropped coins, its own sent transactions
+  "confirmed" (in the SDK, a confirmed transaction is final), and nothing new.
+- **What the wallet does.** The shielded, unshielded and DUST wallets are the
+  SDK's, built with their sync services wrapped (`midnight.js`, "rewind"):
+  `CHAIN_REWOUND`, read from the error the stream fails with, stops that
+  stream quietly and tells the engine. The engine stops the session and deletes
+  the snapshot, as **Rescan** does: the wallet record and its birthday, the
+  notes on its own transactions, token labels and site approvals stay. It
+  syncs again from the birthday after the usual backoff (2 seconds, doubled by
+  a rewind while it syncs again), with no password while unlocked, and the
+  sync status reads "The network replaced its recent blocks; syncing again"
+  until it is synced. A wallet locked at the time syncs again at the next
+  unlock, when its snapshot meets the same answer.
+- **After it.** The wallet shows what the indexer shows now: a credit in a
+  dropped block is gone until the block returns. A transaction the wallet
+  sent that was in such a block is left out of the activity until the indexer
+  reports it again (its lifecycle record went with the snapshot), and the coins
+  it spent show as the indexer has them, so none stays booked.
+- **Elsewhere** the code never comes, and nothing changes.
 
 ### What each wallet downloads
 
@@ -645,6 +680,7 @@ its arguments.
 | --- | --- |
 | `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
 | `npm run check:birthday` | where a wallet birthday lands, under Node against an in-process stub indexer: a new wallet at the tip, a creation time or a restore's date at the last block at or before it, the start and the tip at either end |
+| `npm run check:rewind` | an indexer's `CHAIN_REWOUND`, under Node against an in-process stub of its GraphQL WebSocket: the SDK's unshielded sync, wrapped as the wallet wraps it, stops quietly and tells the engine once; any other error still fails it for the SDK's retry |
 | `npm run smoke` | the engine's Midnight logic under Node against a real network: a fresh phrase born at the tip, sync, addresses, balances, snapshot and resume of all three parts; with a funded seed (scanned from the start), sends and DUST registration |
 | `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the same wallet opens on Preprod without a password, removing it works, the WASM prover proves in a worker |
 | `npm run check:connector` | the built extension and the test dApp in a browser, through every connector method, answering the approval windows (`--prover server` proves with the proof server, `--profile-root` picks where its throwaway profile goes) |
@@ -732,6 +768,6 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
 | `extension/src/inject.js`, `content.js` | the page's connector object and its relay |
 | `extension/src/ui/` | popup and approval windows (React) |
 | `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, the page policy check, Blockfrost URL handling, units |
-| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser, connector, custom-network and birthday checks |
+| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser, connector, custom-network, birthday and rewind checks |
 | `dapp/` | the local test dApp: `index.html`, `app.js`, `serve.mjs`, `compile.mjs`, `contract/counter.compact` |
 | `docs/` | this documentation and its screenshots |
