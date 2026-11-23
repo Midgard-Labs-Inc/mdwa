@@ -1,12 +1,13 @@
 // The popup (380x600): starting, errors, onboarding, unlock and the wallet
-// shell that hosts every screen. The engine pushes its whole state, and each
-// screen asks for what else it needs through `ui(method)`.
+// shell that hosts every screen, and the form for the user's own networks
+// over any of them. The engine pushes its whole state, and each screen asks
+// for what else it needs through `ui(method)`.
 import './theme.js';
 import { ensureCurrentBuild } from './fresh.js';
 import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  ClockCounterClockwiseIcon, CubeIcon, GearSixIcon, GlobeHemisphereWestIcon, HouseIcon, LockKeyIcon, PlusIcon, WarningCircleIcon,
+  ClockCounterClockwiseIcon, CubeIcon, GearSixIcon, GlobeHemisphereWestIcon, HouseIcon, LockKeyIcon, PencilSimpleIcon, PlusIcon, WarningCircleIcon,
 } from '@phosphor-icons/react';
 import { Banner } from '@cloudflare/kumo/components/banner';
 import { Checkbox } from '@cloudflare/kumo/components/checkbox';
@@ -14,13 +15,14 @@ import { DropdownMenu } from '@cloudflare/kumo/components/dropdown';
 import { InputArea } from '@cloudflare/kumo/components/input';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { Toasty, useKumoToastManager } from '@cloudflare/kumo/components/toast';
-import { Mark, NETWORK_LOOK } from './brand.jsx';
+import { Mark, networkLook } from './brand.jsx';
 import {
-  ActionFooter, BottomNav, DateField, Field, Heading, MainHeader, NavItem, NetworkPill, Notice, OnboardingHeader, PageHeader, PasswordField,
-  PrimaryButton, Screen, SecondaryButton, Section, SeedWord, SyncPill, Viewport, WalletIdentity,
+  ActionFooter, BottomNav, DateField, Field, Heading, LinkButton, MainHeader, NavItem, NetworkPill, Notice, OnboardingHeader, PageHeader,
+  PasswordField, PrimaryButton, Screen, SecondaryButton, Section, SeedWord, SyncPill, Viewport, WalletIdentity,
 } from './components.jsx';
 import { ui, onState } from './api.js';
-import { localDay, networkName, plural } from './format.js';
+import { currentNetwork, hasDust, localDay, networkName, plural } from './format.js';
+import { NetworkForm } from './networks.jsx';
 import { Home } from './home.jsx';
 import { Receive } from './receive.jsx';
 import { Send } from './send.jsx';
@@ -44,7 +46,8 @@ function useEngineState() {
 }
 
 // ------------------------------------------------------------------ network --
-function NetworkMenu({ state }) {
+/** The network switcher; `onForm('add')` opens the form for a new network. */
+function NetworkMenu({ state, onForm }) {
   const toasts = useKumoToastManager();
   const select = async id => {
     try { await ui('selectNetwork', { network: id }); }
@@ -60,7 +63,7 @@ function NetworkMenu({ state }) {
             <DropdownMenu.Item key={n.id} className={n.id === state.network ? SELECTED : undefined} onClick={() => select(n.id)}>
               <span className="flex items-start gap-3">
                 {/* The dot sits on the name's line, with room before the text. */}
-                <span className={`mt-[5px] size-2.5 shrink-0 rounded-full ${NETWORK_LOOK[n.id]?.dot}`} />
+                <span className={`mt-[5px] size-2.5 shrink-0 rounded-full ${networkLook(n.id).dot}`} />
                 <span className="flex flex-col">
                   <span className="font-medium">{n.name}</span>
                   <span className={`text-xs ${n.id === state.network ? 'text-kumo-info' : 'text-kumo-subtle'}`}>{n.hasWallet ? 'Wallet set up' : 'No wallet yet'}</span>
@@ -69,6 +72,10 @@ function NetworkMenu({ state }) {
             </DropdownMenu.Item>
           ))}
         </DropdownMenu.Group>
+        <DropdownMenu.Separator />
+        <DropdownMenu.Item onClick={() => onForm('add')}>
+          <span className="flex items-center gap-3"><PlusIcon size={12} className="shrink-0" /><span className="font-medium">Add a network…</span></span>
+        </DropdownMenu.Item>
       </DropdownMenu.Content>
     </DropdownMenu>
   );
@@ -108,15 +115,15 @@ function EngineError({ message }) {
 
 // --------------------------------------------------------------- onboarding --
 const FEATURES = [
-  { icon: CubeIcon, title: 'Uses a Midnight node and indexer', body: name => `Reads ${name} through a node and an indexer you can change in Settings.` },
+  { icon: CubeIcon, title: 'Uses endpoints you choose', body: name => `Reads ${name} through an indexer, and sends to a node or a submit URL, all changeable in Settings.` },
   { icon: LockKeyIcon, title: 'Keys stay on this device', body: () => 'Your key is encrypted with your password and never leaves this browser.' },
-  { icon: GlobeHemisphereWestIcon, title: 'One wallet per network', body: () => 'Mainnet, Preprod, Preview and Undeployed each keep their own wallet.' },
+  { icon: GlobeHemisphereWestIcon, title: 'One wallet per network', body: () => 'Every network, built in or added, keeps its own wallet.' },
 ];
 
-function Welcome({ state, name, onPick }) {
+function Welcome({ state, name, onPick, onForm }) {
   return (
     <Screen>
-      <OnboardingHeader mark={<Mark size={24} />} network={<NetworkMenu state={state} />} />
+      <OnboardingHeader mark={<Mark size={24} />} network={<NetworkMenu state={state} onForm={onForm} />} />
       <div className="flex min-h-0 flex-1 flex-col justify-center gap-6 px-6 pt-6 pb-2">
         <div className="flex flex-col items-center gap-2.5">
           <Mark size={56} />
@@ -136,6 +143,7 @@ function Welcome({ state, name, onPick }) {
             </li>
           ))}
         </ul>
+        {currentNetwork(state)?.user && <LinkButton icon={PencilSimpleIcon} className="self-center" onClick={() => onForm('edit')}>Edit or remove {name}</LinkButton>}
       </div>
       <div className="flex shrink-0 flex-col gap-2 px-4 pt-3 pb-4">
         <PrimaryButton className="w-full" icon={PlusIcon} onClick={() => onPick('new')}>Create a new wallet</PrimaryButton>
@@ -145,7 +153,7 @@ function Welcome({ state, name, onPick }) {
   );
 }
 
-function Onboarding({ state, name }) {
+function Onboarding({ state, name, onForm }) {
   const [mode, setMode] = useState(null);
   const [generated, setGenerated] = useState(null);
   const [words, setWords] = useState('');
@@ -173,7 +181,7 @@ function Onboarding({ state, name }) {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
-  if (!mode) return <Welcome state={state} name={name} onPick={pick} />;
+  if (!mode) return <Welcome state={state} name={name} onPick={pick} onForm={onForm} />;
   const mismatch = confirm.length > 0 && confirm !== password;
   const wordCount = words.trim() ? words.trim().split(/\s+/).length : 0;
   // The picker is bounded to today; a typed date past it is refused too.
@@ -235,7 +243,7 @@ function Onboarding({ state, name }) {
 }
 
 // ------------------------------------------------------------------- unlock --
-function Unlock({ state, name }) {
+function Unlock({ state, name, onForm }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -245,7 +253,7 @@ function Unlock({ state, name }) {
   };
   return (
     <Screen>
-      <OnboardingHeader mark={<Mark size={24} />} network={<NetworkMenu state={state} />} />
+      <OnboardingHeader mark={<Mark size={24} />} network={<NetworkMenu state={state} onForm={onForm} />} />
       <form onSubmit={submit} className="flex min-h-0 flex-1 flex-col">
         <div className="flex min-h-0 flex-1 flex-col justify-center gap-6 px-6">
           <div className="flex flex-col items-center gap-2.5">
@@ -269,7 +277,7 @@ const TABS = [
   { value: 'settings', label: 'Settings', icon: GearSixIcon },
 ];
 
-function Wallet({ state }) {
+function Wallet({ state, onForm }) {
   const [overview, setOverview] = useState(null);
   const [tab, setTab] = useState('home');
   const [page, setPage] = useState(null);   // a sub-page over the tabs: receive, send, dust, sync, { tx }, { token } or { addToken }
@@ -287,16 +295,16 @@ function Wallet({ state }) {
   if (page === 'send') return <Send state={state} overview={overview} onBack={back} onDone={back} />;
   if (page === 'dust') return <DustPage state={state} overview={overview} onBack={back} />;
   if (page === 'sync') return <SyncDetails state={state} onBack={back} />;
-  if (page?.tx) return <TxDetail hash={page.tx} network={state.network} onBack={back} />;
+  if (page?.tx) return <TxDetail hash={page.tx} network={state.network} dust={hasDust(state)} onBack={back} />;
   if (page?.token || page?.addToken) return <TokenPage state={state} overview={overview} target={page} onBack={back} />;
   return (
     <Screen>
       <MainHeader identity={<WalletIdentity address={state.addresses?.unshielded} />}
-        status={<><SyncPill {...syncPill(sync)} onClick={() => setPage('sync')} /><NetworkMenu state={state} /></>} />
+        status={<><SyncPill {...syncPill(sync)} onClick={() => setPage('sync')} /><NetworkMenu state={state} onForm={onForm} /></>} />
       {tab === 'home' && <Home state={state} overview={overview} onOpen={setPage} />}
       {tab === 'activity' && <Activity network={state.network} refresh={`${sync?.tip}:${sync?.status}:${state.busy?.stage}`} onOpen={tx => setPage({ tx })} />}
       {tab === 'sites' && <Sites state={state} />}
-      {tab === 'settings' && <Settings state={state} />}
+      {tab === 'settings' && <Settings state={state} onForm={onForm} />}
       <BottomNav>
         {TABS.map(t => <NavItem key={t.value} icon={t.icon} label={t.label} active={tab === t.value} onClick={() => setTab(t.value)} />)}
       </BottomNav>
@@ -306,12 +314,22 @@ function Wallet({ state }) {
 
 function App() {
   const state = useEngineState();
+  // 'add', or 'edit' for the selected network, while the network form is open.
+  const [form, setForm] = useState(null);
+  const toasts = useKumoToastManager();
   if (!state) return <Booting />;
   if (state.error) return <EngineError message={state.error} />;
+  if (form) {
+    const done = async added => {
+      setForm(null);
+      if (added) await ui('selectNetwork', { network: added }).catch(e => toasts.add({ title: 'Could not switch network', description: e.message, variant: 'error' }));
+    };
+    return <NetworkForm key={form} state={state} editing={form === 'edit'} onDone={done} />;
+  }
   const name = networkName(state);
-  if (!state.hasWallet) return <Onboarding key={state.network} state={state} name={name} />;
-  if (state.locked) return <Unlock key={state.network} state={state} name={name} />;
-  return <Wallet key={state.network} state={state} />;
+  if (!state.hasWallet) return <Onboarding key={state.network} state={state} name={name} onForm={setForm} />;
+  if (state.locked) return <Unlock key={state.network} state={state} name={name} onForm={setForm} />;
+  return <Wallet key={state.network} state={state} onForm={setForm} />;
 }
 
 ensureCurrentBuild().then(current => { if (current) createRoot(document.getElementById('root')).render(<Toasty><App /></Toasty>); });

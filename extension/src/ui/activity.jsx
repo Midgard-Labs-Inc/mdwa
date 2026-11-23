@@ -143,7 +143,7 @@ export function Activity({ network, refresh, onOpen }) {
 }
 
 // --------------------------------------------------------------- detail --
-export function TxDetail({ hash, network, onBack }) {
+export function TxDetail({ hash, network, dust: withDust, onBack }) {
   const labels = useTokenLabels(network);
   const [tx, setTx] = useState(undefined);
   const [error, setError] = useState(null);
@@ -182,7 +182,7 @@ export function TxDetail({ hash, network, onBack }) {
           </Section>
           <Section title="Transaction">
             <ListCard>
-              {tx.fee != null && <DetailRow label="Network fee">{dust(tx.fee, { full: true })} DUST</DetailRow>}
+              {tx.fee != null && withDust && <DetailRow label="Network fee">{dust(tx.fee, { full: true })} DUST</DetailRow>}
               <button type="button" onClick={() => copy(tx.hash)} className="w-full text-left outline-none hover:bg-kumo-tint" aria-label="Copy transaction hash">
                 <DetailRow label={unsubmitted ? 'Identifier' : 'Hash'} mono>{copied ? 'Copied' : <span className="inline-flex items-center gap-1">{shortHash(tx.hash)} <CopyIcon size={11} /></span>}</DetailRow>
               </button>

@@ -4,7 +4,9 @@
 // connector's table sits beside it under its own envelope kind.
 //
 // Networks are separate wallets: each has its own recovery phrase, password,
-// database and snapshots. Only the selected network syncs.
+// database and snapshots. Only the selected network syncs. Besides the
+// built-in networks there are the user's own (wallet/networks.mjs, custom.js),
+// kept in the settings.
 //
 // Unlocking is once per browser session: the password opens the sealed seed,
 // and the seeds of every network unlocked since stay in this worker's memory
@@ -13,13 +15,14 @@
 // stays encrypted.
 import { firstValueFrom, filter, timeout } from 'rxjs';
 import {
-  NETWORKS, NETWORK_IDS, DEFAULT_NETWORK, defaultEndpoints, endpointsOf, connectionUrls,
+  DEFAULT_NETWORK, checkedEndpoints, connectionUrls, defaultEndpoints, endpointsOf, network, networkIds, userNetworkKey,
 } from '../../wallet/networks.mjs';
 import * as db from './db.js';
 import * as vault from './vault.js';
 import * as midnight from './midnight.js';
 import * as birthdays from './birthday.js';
 import * as tokens from './tokens.js';
+import * as custom from './custom.js';
 import { makeConnector } from './connector.js';
 
 const SNAPSHOT_EVERY_MS = 60000;
@@ -39,6 +42,7 @@ const state = {
   sync: idleSync(), busy: null, waiting: [], prover: { kind: 'wasm', url: '' },
 };
 let store = db.forNetwork(DEFAULT_NETWORK);   // the selected network's database
+let userNetworks = {};                         // the user's network definitions, as stored in the settings
 const unlocked = new Map();                    // network -> { seedHex, key } for this browser session
 let session = null;                            // the running SDK wallet of the selected network
 let retryTimer = null, retryDelay = 2000;
@@ -56,13 +60,18 @@ function publish() {
 const snapshot = () => structuredClone(state);
 
 const lockedError = () => Object.assign(new Error('Unlock the wallet'), { locked: true });
-const net = () => NETWORKS[store.network];
+const net = () => network(store.network, userNetworks);
+const known = id => networkIds(userNetworks).includes(id);
 
 async function settings() {
   const s = await db.getSettings();
-  return { network: NETWORKS[s.network] ? s.network : DEFAULT_NETWORK, endpoints: s.endpoints ?? {} };
+  userNetworks = s.networks ?? {};
+  return { network: known(s.network) ? s.network : DEFAULT_NETWORK, endpoints: s.endpoints ?? {} };
 }
-const endpointsFor = async network => endpointsOf(network, (await settings()).endpoints[network]);
+const endpointsFor = async id => {
+  const { endpoints } = await settings();
+  return endpointsOf(network(id, userNetworks), endpoints[id]);
+};
 
 async function wallet() {
   const w = await store.get('wallet');
@@ -80,9 +89,13 @@ async function reflect() {
   state.birthday = w?.birthday ?? null;
   state.birthdayNote = w?.birthdayNote ?? null;
   state.prover = (await endpointsFor(store.network)).prover;
-  state.networks = await Promise.all(NETWORK_IDS.map(async id => ({
-    id, name: NETWORKS[id].name, hasWallet: id === store.network ? !!w : !!(await db.forNetwork(id).get('wallet')),
-  })));
+  state.networks = await Promise.all(networkIds(userNetworks).map(async id => {
+    const n = network(id, userNetworks);
+    return {
+      id, name: n.name, networkId: n.networkId, user: n.user, dust: n.dust,
+      hasWallet: id === store.network ? !!w : !!(await db.forNetwork(id).get('wallet')),
+    };
+  }));
 }
 
 // -------------------------------------------------------------- records ---
@@ -114,14 +127,17 @@ const txMeta = async () => (await readRecord('txmeta')) ?? {};
 async function startSession() {
   if (session || !state.hasWallet || state.locked) return;
   clearTimeout(retryTimer);
-  const network = store.network;
-  const run = { network, wallet: null, latest: null, subscription: null, timers: [], stopped: false, saving: null, everSynced: false };
+  const n = net();
+  const run = {
+    network: n.id, wallet: null, latest: null, subscription: null, timers: [], stopped: false, saving: null, everSynced: false,
+    dust: n.dust,
+  };
   session = run;
   state.sync = { ...idleSync(), status: 'connecting' };
   publish();
   try {
-    const endpoints = await endpointsFor(network);
-    const urls = connectionUrls(network, endpoints);   // throws the Blockfrost project id message
+    const endpoints = await endpointsFor(n.id);
+    const urls = connectionUrls(n, endpoints);   // throws the Blockfrost project id message
     // The chain tip, read from the indexer from the start: the SDK keeps
     // trying an endpoint it cannot reach without saying so, so this is also
     // how the user learns that the indexer does not answer.
@@ -141,17 +157,20 @@ async function startSession() {
     // The SDK retries a query the indexer does not offer forever, without
     // saying so: an indexer that lacks one of the wallet's queries (an older
     // or third-party one) is named here instead of syncing without end.
-    const missing = await birthdays.missingQueries(urls.indexerHttp);
+    const missing = await birthdays.missingQueries(urls.indexerHttp, { dust: run.dust });
     if (missing?.length) {
       throw Object.assign(new Error(`The indexer at ${endpoints.indexerHttp} does not offer ${missing.join(', ')}, which this wallet's sync needs`), { permanent: true });
     }
-    const keys = unlocked.get(network);
+    // A network the user added is the chain it was added with; another chain
+    // behind the same URLs is refused rather than synced as this wallet.
+    if (n.user) await custom.checkChain(n, urls.indexerHttp);
+    const keys = unlocked.get(n.id);
     const stored = await store.get('snapshot');
     let resume = null;
     if (stored && stored.indexerHttp === endpoints.indexerHttp) resume = await vault.decryptJson(keys.key, stored.box);
     const record = await store.get('wallet');
     run.wallet = await midnight.openWallet({
-      network, endpoints, seed: vault.fromHex(keys.seedHex), snapshot: resume, birthday: record?.birthday ?? null,
+      net: n, endpoints, seed: vault.fromHex(keys.seedHex), snapshot: resume, birthday: record?.birthday ?? null,
     });
     if (run.stopped) { await run.wallet.stop().catch(() => {}); return; }
     state.sync.start = {
@@ -170,7 +189,7 @@ function onState(run, s) {
   if (session !== run) return;
   const wasSynced = run.latest?.isSynced;
   run.latest = s;
-  const sync = midnight.syncOf(s);
+  const sync = midnight.syncOf(s, { dust: run.dust });
   if (s.isSynced) run.everSynced = true;
   // The DUST wallet re-reads its state in a pass every 30 seconds (see
   // midnight.FastDustWallet), and while a pass runs the SDK reports DUST as
@@ -391,7 +410,7 @@ async function birthdayFor(restore, date) {
   if (!restore && date) throw new Error('A wallet birthday is for restoring a wallet');
   if (date) birthdays.birthdayInstant(date);   // a malformed or future date, before any network
   let indexerHttp;
-  try { indexerHttp = connectionUrls(store.network, await endpointsFor(store.network)).indexerHttp; } catch (error) {
+  try { indexerHttp = connectionUrls(net(), await endpointsFor(store.network)).indexerHttp; } catch (error) {
     if (restore) throw error;
     return { birthday: null, note: `The chain tip could not be read (${error.message}), so the wallet scans from the start of the chain` };
   }
@@ -408,7 +427,7 @@ async function createWallet({ mnemonic, password, restore = false, birthday: dat
   if (!password || password.length < 8) throw new Error('Use a password of at least 8 characters');
   const seed = await midnight.seedFromMnemonic(mnemonic);
   const seedHex = vault.toHex(seed);
-  const addresses = midnight.deriveAddresses(seed, store.network);
+  const addresses = midnight.deriveAddresses(seed, net());
   const { birthday, note } = await birthdayFor(!!restore, date || null);
   const sealed = await vault.seal(seedHex, password);
   await store.put('wallet', {
@@ -444,12 +463,12 @@ async function lock() {
 }
 
 /** Only the selected network syncs; switching stops the other one. */
-async function selectNetwork({ network }) {
-  if (!NETWORKS[network]) throw new Error(`Unknown network ${network}`);
-  if (network !== store.network) {
+async function selectNetwork({ network: id }) {
+  if (!known(id)) throw new Error(`Unknown network ${id}`);
+  if (id !== store.network) {
     await stopSession({ save: true });
-    await db.putSettings({ ...(await db.getSettings()), network });
-    store = db.forNetwork(network);
+    await db.putSettings({ ...(await db.getSettings()), network: id });
+    store = db.forNetwork(id);
     retryDelay = 2000;
     await reflect();
     publish();
@@ -491,32 +510,27 @@ async function rescan({ fromStart = false } = {}) {
 }
 
 // -------------------------------------------------------------- settings ---
-function cleanEntry(network, entry) {
-  const e = endpointsOf(network, entry);
-  for (const key of ['node', 'indexerHttp', 'indexerWs']) {
-    let u;
-    try { u = new URL(e[key]); } catch { throw new Error(`${NETWORKS[network].name}: ${key} is not a URL`); }
-    const ok = key === 'node' || key === 'indexerWs' ? /^wss?:$/.test(u.protocol) : /^https?:$/.test(u.protocol);
-    if (!ok) throw new Error(`${NETWORKS[network].name}: ${key} has the wrong scheme (${u.protocol})`);
-  }
-  if (e.prover.kind === 'server') {
-    try { if (!/^https?:$/.test(new URL(e.prover.url).protocol)) throw new Error(); }
-    catch { throw new Error(`${NETWORKS[network].name}: the proof server URL must be http or https`); }
-  }
-  return e;
+/** Starts the selected network's session again with what is stored now. */
+async function reconnect() {
+  await stopSession({ save: true });
+  retryDelay = 2000;
+  await reflect();
+  publish();
+  startSession();
 }
 
-async function saveSettings({ network, endpoints }) {
+async function saveSettings({ network: selected, endpoints }) {
   // One network's entry, or a map of entries by network.
   const isEntry = endpoints && typeof endpoints === 'object' && ('node' in endpoints || 'indexerHttp' in endpoints || 'prover' in endpoints);
-  const updates = isEntry ? { [network ?? store.network]: endpoints } : (endpoints ?? {});
+  const updates = isEntry ? { [selected ?? store.network]: endpoints } : (endpoints ?? {});
   const s = await db.getSettings();
   const next = { ...s, endpoints: { ...(s.endpoints ?? {}) } };
   const changed = [];
   for (const [id, entry] of Object.entries(updates)) {
-    if (!NETWORKS[id]) throw new Error(`Unknown network ${id}`);
-    const before = endpointsOf(id, next.endpoints[id]);
-    const after = cleanEntry(id, entry);
+    if (!known(id)) throw new Error(`Unknown network ${id}`);
+    const n = network(id, userNetworks);
+    const before = endpointsOf(n, next.endpoints[id]);
+    const after = checkedEndpoints(n, entry);
     if (JSON.stringify(before) === JSON.stringify(after)) continue;
     next.endpoints[id] = after;
     changed.push(id);
@@ -524,12 +538,56 @@ async function saveSettings({ network, endpoints }) {
     if (before.indexerHttp !== after.indexerHttp) await db.forNetwork(id).delete('snapshot');
   }
   await db.putSettings(next);
-  if (changed.includes(store.network)) {
-    await stopSession({ save: true });
-    retryDelay = 2000;
+  if (changed.includes(store.network)) await reconnect();
+  else {
     await reflect();
     publish();
-    startSession();
+  }
+  return snapshot();
+}
+
+// -------------------------------------------------------------- networks ---
+/** Adds a user network (no `network`) or edits one; returns its id. */
+async function saveNetwork({ network: id = null, ...fields }) {
+  const before = id === null ? null : network(id, userNetworks);
+  if (before && !before.user) throw new Error(`${before.name} is built in: change its endpoints in Settings`);
+  const name = String(fields.name ?? '').trim();
+  if (networkIds(userNetworks).some(other => other !== id && network(other, userNetworks).name.toLowerCase() === name.toLowerCase())) {
+    throw new Error(`Another network is called ${name}`);
+  }
+  const def = await custom.defineNetwork(fields, before);
+  const key = id ?? userNetworkKey();
+  const s = await db.getSettings();
+  await db.putSettings({ ...s, networks: { ...(s.networks ?? {}), [key]: def } });
+  await settings();
+  const now = network(key, userNetworks);
+  // Snapshots belong to the indexer that produced them.
+  if (before && before.indexerHttp !== now.indexerHttp) await db.forNetwork(key).delete('snapshot');
+  if (key === store.network && JSON.stringify({ ...before, name: now.name }) !== JSON.stringify(now)) await reconnect();
+  else {
+    await reflect();
+    publish();
+  }
+  return { network: key };
+}
+
+/** Removes a user network that has no wallet (its wallet is removed first,
+ *  with its password, in Settings). */
+async function removeNetwork({ network: id }) {
+  const n = network(id, userNetworks);
+  if (!n.user) throw new Error(`${n.name} is built in`);
+  if (await db.forNetwork(id).get('wallet')) throw new Error(`Remove the ${n.name} wallet first (Settings, Danger zone)`);
+  await db.forNetwork(id).clear();
+  const s = await db.getSettings();
+  const networks = { ...s.networks }, endpoints = { ...s.endpoints };
+  delete networks[id];
+  delete endpoints[id];
+  const selected = store.network === id;
+  await db.putSettings({ ...s, networks, endpoints, ...(selected ? { network: DEFAULT_NETWORK } : {}) });
+  await settings();
+  if (selected) {
+    store = db.forNetwork(DEFAULT_NETWORK);
+    await reconnect();
   } else {
     await reflect();
     publish();
@@ -541,13 +599,13 @@ async function saveSettings({ network, endpoints }) {
 const ui = {
   state: async () => snapshot(),
   generateMnemonic: async () => ({ words: midnight.generateMnemonic() }),
-  createWallet, unlock, lock, selectNetwork, resetWallet, rescan, saveSettings,
+  createWallet, unlock, lock, selectNetwork, resetWallet, rescan, saveSettings, saveNetwork, removeNetwork,
   // Token names (tokens.js): labels are read from the selected network's
   // database whether or not it is unlocked; watchToken asks its indexer.
   ...tokens.uiMethods({
     store: () => store,
     hasWallet: () => state.hasWallet,
-    indexerHttp: async () => connectionUrls(store.network, await endpointsFor(store.network)).indexerHttp,
+    indexerHttp: async () => connectionUrls(net(), await endpointsFor(store.network)).indexerHttp,
     balances: () => (session?.network === store.network && session.latest
       ? { shielded: session.latest.shielded.balances, unshielded: session.latest.unshielded.balances } : null),
   }),
@@ -559,7 +617,8 @@ const ui = {
   previewSend: async ({ outputs }) => {
     const { wallet: w } = await synced();
     return withBusy('send', 'balancing', async () => {
-      const built = await midnight.buildTransfer(w, outputs);
+      // A network without DUST has nothing to pay a fee with, and charges none.
+      const built = await midnight.buildTransfer(w, outputs, { payFees: net().dust });
       const id = keepPreview({ kind: 'send', network: store.network, wallet: w, recipe: built.recipe, outputs: built.outputs, fee: built.fee });
       return { id, outputs: built.outputs, fee: built.fee, ttl: built.ttl };
     });
@@ -574,6 +633,7 @@ const ui = {
   },
   cancel: async ({ id }) => { await dropPreview(String(id)); return {}; },
   dustPreview: async ({ action }) => {
+    if (!net().dust) throw new Error('This network has no DUST');
     const { wallet: w } = await synced();
     return withBusy('dust', 'balancing', async () => {
       const built = await midnight.buildDustAction(w, action);
@@ -613,10 +673,11 @@ const ui = {
   },
   settings: async () => {
     const s = await settings();
+    const ids = networkIds(userNetworks);
     return {
-      network: store.network, birthday: state.birthday,
-      endpoints: Object.fromEntries(NETWORK_IDS.map(id => [id, endpointsOf(id, s.endpoints[id])])),
-      defaults: Object.fromEntries(NETWORK_IDS.map(id => [id, defaultEndpoints(id)])),
+      network: store.network, birthday: state.birthday, definition: net(),
+      endpoints: Object.fromEntries(ids.map(id => [id, endpointsOf(network(id, userNetworks), s.endpoints[id])])),
+      defaults: Object.fromEntries(ids.map(id => [id, defaultEndpoints(network(id, userNetworks))])),
     };
   },
 };
@@ -631,7 +692,7 @@ const connector = {
     hasWallet: state.hasWallet, locked: state.locked,
   }),
   ...makeConnector({
-    context: () => ({ network: store.network, networkId: net().networkId, name: net().name }),
+    context: () => ({ ...net(), network: store.network }),
     live, storedWallet: wallet, endpointsFor, withBusy, releaseBusy, keepPreview, takePreview, dropPreview, noteTransaction, txMeta,
     state, publish,
   }),

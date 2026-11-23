@@ -1,11 +1,12 @@
 // Chain sync: the summary card shown on Home and in the header pill, and the
-// Sync details page with per-wallet progress and the connection in use.
+// Sync details page with per-wallet progress and the connection in use. A
+// network without DUST shows two wallets.
 import { useEffect, useState } from 'react';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { DetailRow, ListCard, PageHeader, Screen, Section, SyncCard, Viewport } from './components.jsx';
 import { entryFor } from './endpoints.js';
 import { ui } from './api.js';
-import { dateTime, percentText, withCommas } from './format.js';
+import { dateTime, hasDust, percentText, withCommas } from './format.js';
 
 /** The header pill's status and label for the engine's sync state. */
 export function syncPill(sync) {
@@ -71,14 +72,14 @@ export function SyncDetails({ state, onBack }) {
           <ListCard>
             {row('Shielded', 'shielded')}
             {row('Unshielded', 'unshielded')}
-            {row('DUST', 'dust')}
+            {hasDust(state) && row('DUST', 'dust')}
             <DetailRow label="Chain tip">{sync?.tip != null ? withCommas(sync.tip) : '—'}</DetailRow>
           </ListCard>
         </Section>
         <Section title="Connection">
           {!settings ? <div className="flex justify-center p-4"><Loader /></div> : (
             <ListCard>
-              <DetailRow label="Node" mono>{entry.node ?? '—'}</DetailRow>
+              {entry.submitUrl ? <DetailRow label="Submit URL" mono>{entry.submitUrl}</DetailRow> : <DetailRow label="Node" mono>{entry.node ?? '—'}</DetailRow>}
               <DetailRow label="Indexer" mono>{entry.indexerHttp ?? '—'}</DetailRow>
               <DetailRow label="Prover" mono>{proverText(state.prover)}</DetailRow>
             </ListCard>

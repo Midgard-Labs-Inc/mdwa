@@ -23,7 +23,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { wasmPlugin, forbidPlugin } from './esbuild-plugins.mjs';
 import { buildTransfer, completeRecipe, openWallet, overviewOf, NIGHT } from '../extension/src/midnight.js';
-import { endpointsOf } from '../wallet/networks.mjs';
+import { endpointsOf, network } from '../wallet/networks.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, arg, i, all) => {
@@ -190,7 +190,7 @@ try {
     log('devnet wallet', JSON.stringify(created.addresses));
 
     log('funding it from the devnet seed, under Node');
-    const funder = await openWallet({ network: 'undeployed', endpoints: endpointsOf('undeployed', devnet), seed: Uint8Array.from(args['devnet-seed'].match(/../g), b => parseInt(b, 16)) });
+    const funder = await openWallet({ net: network('undeployed'), endpoints: endpointsOf(network('undeployed'), devnet), seed: Uint8Array.from(args['devnet-seed'].match(/../g), b => parseInt(b, 16)) });
     const fs = await funder.facade.waitForSyncedState();
     const funderAddress = overviewOf(fs, funder.networkId).addresses.unshielded;
     const shieldedType = Object.keys(fs.shielded.balances).find(t => fs.shielded.balances[t] > 1000n);

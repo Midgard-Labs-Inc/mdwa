@@ -20,13 +20,13 @@ import {
   historyItems, NIGHT, openWallet, overviewOf, seedFromMnemonic, syncOf,
 } from '../extension/src/midnight.js';
 import { birthdayBlock } from '../extension/src/birthday.js';
-import { endpointsOf } from '../wallet/networks.mjs';
+import { endpointsOf, network as networkOf } from '../wallet/networks.mjs';
 
 const args = Object.fromEntries(process.argv.slice(2).reduce((acc, arg, i, all) => {
   if (arg.startsWith('--')) acc.push([arg.slice(2), all[i + 1] ?? 'true']); return acc;
 }, []));
-const network = args.network ?? 'preview';
-const endpoints = endpointsOf(network, {
+const net = networkOf(args.network ?? 'preview');
+const endpoints = endpointsOf(net, {
   ...(args.node ? { node: args.node } : {}),
   ...(args.indexer ? {
     indexerHttp: `${args.indexer}/api/v4/graphql`,
@@ -60,11 +60,11 @@ if (args.seed) {
   seed = await seedFromMnemonic(words);
   log(`fresh recovery phrase (${words.length} words) -> ${seed.length}-byte seed`);
 }
-const derived = deriveAddresses(seed, network);
+const derived = deriveAddresses(seed, net);
 
 const birthday = args.seed ? null : await birthdayBlock(endpoints.indexerHttp);
 log('wallet birthday', json(birthday));
-const first = await openWallet({ network, endpoints, seed, birthday });
+const first = await openWallet({ net, endpoints, seed, birthday });
 log('shielded sync starts from', json(first.shieldedStart));
 const s1 = await synced(first, 'first sync');
 log('synced');
@@ -87,7 +87,7 @@ log('snapshot sizes', json(Object.fromEntries(Object.entries(snapshot).map(([k, 
 await first.stop();
 log('stopped; resuming from the snapshot');
 
-const resumed = await openWallet({ network, endpoints, seed, snapshot, birthday });
+const resumed = await openWallet({ net, endpoints, seed, snapshot, birthday });
 const resumeStarted = Date.now();
 const s2 = await synced(resumed, 'resume');
 log(`resumed and synced in ${((Date.now() - resumeStarted) / 1000).toFixed(1)}s`, json(resumed.started));
@@ -100,7 +100,7 @@ if (args.seed) {
   // Funded flows: send NIGHT (unshielded) and a shielded token to a fresh
   // second wallet, which then registers its NIGHT for DUST generation and
   // deregisters it again.
-  const other = await openWallet({ network, endpoints, seed: await seedFromMnemonic(generateMnemonic()) });
+  const other = await openWallet({ net, endpoints, seed: await seedFromMnemonic(generateMnemonic()) });
   const o1 = await synced(other, 'second wallet');
   const to = overviewOf(o1, other.networkId).addresses;
   const shieldedToken = again.shielded.find(t => t.type !== again.unshielded[0]?.type)?.type ?? again.shielded[0].type;

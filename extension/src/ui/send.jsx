@@ -1,6 +1,7 @@
 // Send: recipients with a token and an amount each, then a review of what the
 // engine prepared. The wallet is already unlocked, so sending needs no
 // password; the engine reports Balancing, Proving and Submitting in `busy`.
+// On a network without DUST there is no fee, so none is mentioned.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CaretDownIcon, ClockCounterClockwiseIcon, PaperPlaneTiltIcon, PlusIcon, XIcon } from '@phosphor-icons/react';
 import { Badge } from '@cloudflare/kumo/components/badge';
@@ -12,7 +13,7 @@ import {
   PrimaryButton, Screen, SecondaryButton, SectionLabel, TokenAvatar, Viewport,
 } from './components.jsx';
 import { ui } from './api.js';
-import { busyText, dateTime, dust, isNight, networkName, night, quantity, shortAddress, shortType } from './format.js';
+import { busyText, currentNetwork, dateTime, dust, hasDust, isNight, networkName, night, quantity, shortAddress, shortType } from './format.js';
 import { describeToken, parseTokenAmount, tokenAmount, tokenLetters, tokenTitle, tokenUnit, useTokenLabels } from './tokens.js';
 
 let recipientIds = 0;
@@ -25,7 +26,7 @@ const parseFor = (labels, kind, type, text) => parseTokenAmount(describeToken(la
 function addressVerdict(check, state) {
   if (!check) return { kind: null, error: null };
   if (!check.valid) return { kind: null, error: check.error ?? 'This is not a valid address' };
-  if (check.network && check.network !== state.network) return { kind: null, error: `This is a ${check.network} address, not ${networkName(state)}` };
+  if (check.network && check.network !== currentNetwork(state)?.networkId) return { kind: null, error: `This is a ${check.network} address, not ${networkName(state)}` };
   if (check.kind === 'dust') return { kind: null, error: 'This is a DUST address. DUST cannot be sent to it' };
   return { kind: check.kind, error: null };
 }
@@ -148,7 +149,7 @@ function SentAmount({ output, labels }) {
   );
 }
 
-function Review({ preview, labels }) {
+function Review({ preview, labels, withDust }) {
   const { outputs } = preview;
   const single = outputs.length === 1;
   const kinds = [...new Set(outputs.map(o => o.kind))];
@@ -177,7 +178,7 @@ function Review({ preview, labels }) {
       )}
       <ListCard>
         <DetailRow label="Kind">{kinds.length === 1 ? capital(kinds[0]) : 'Shielded and unshielded'}</DetailRow>
-        <DetailRow label="Network fee">{dust(preview.fee, { full: true })} DUST</DetailRow>
+        {withDust && <DetailRow label="Network fee">{dust(preview.fee, { full: true })} DUST</DetailRow>}
         <DetailRow label="Expires">{dateTime(preview.ttl)}</DetailRow>
       </ListCard>
     </>
@@ -255,7 +256,7 @@ export function Send({ state, overview, onBack, onDone }) {
       <Screen>
         <PageHeader title="Review" onBack={edit} />
         <Viewport>
-          <Review preview={preview} labels={labels} />
+          <Review preview={preview} labels={labels} withDust={hasDust(state)} />
           {busy === 'send' && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy)} />}
           {error && <Banner size="sm" variant="error" description={error} />}
         </Viewport>
@@ -283,7 +284,7 @@ export function Send({ state, overview, onBack, onDone }) {
           </p>
         )}
         {error && <Banner size="sm" variant="error" description={error} />}
-        <p className="text-[11px] leading-normal text-kumo-subtle">The network fee is paid in DUST, not in the token you send.</p>
+        {hasDust(state) && <p className="text-[11px] leading-normal text-kumo-subtle">The network fee is paid in DUST, not in the token you send.</p>}
       </Viewport>
       <ActionFooter primary={<PrimaryButton loading={busy === 'review'} disabled={!!busy || !ready || overspent} onClick={review}>Review</PrimaryButton>} />
     </Screen>

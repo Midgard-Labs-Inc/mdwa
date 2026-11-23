@@ -6,6 +6,7 @@ own page: [dApp connector](dapp-connector.md).
 
 - [Architecture](#architecture)
 - [Networks and endpoints](#networks-and-endpoints)
+- [Your own networks](#your-own-networks)
 - [How sync works](#how-sync-works)
 - [Keys and unlocking](#keys-and-unlocking)
 - [Proving](#proving)
@@ -80,7 +81,9 @@ after a rebuild (`extension/src/ui/fresh.js`).
 
 The extension's page policy allows `'wasm-unsafe-eval'` and connections to
 `localhost`, `127.0.0.1`, the default endpoints' hosts, `srs.midnight.network`
-and, because every endpoint is editable, any `https:` and `wss:` origin.
+and, because every endpoint is editable, any `https:` and `wss:` origin. Plain
+`http:` and `ws:` reach `localhost` and `127.0.0.1` only, so a network you add
+may not name another plain-HTTP host (see [Your own networks](#your-own-networks)).
 
 ## Networks and endpoints
 
@@ -92,7 +95,8 @@ and, because every endpoint is editable, any `https:` and `wss:` origin.
 | Undeployed | `undeployed` | a local node at `ws://localhost:9944`, a local indexer at `http://localhost:8088` |
 
 Preview is the default network. The table is in
-[wallet/networks.mjs](../wallet/networks.mjs).
+[wallet/networks.mjs](../wallet/networks.mjs). Networks you define sit beside
+these four; see [Your own networks](#your-own-networks).
 
 - **Separate wallets.** Each network has its own recovery phrase, password,
   IndexedDB database (`mdwa-<network>`), snapshot, token labels and site
@@ -111,6 +115,99 @@ Preview is the default network. The table is in
   Mainnet, the sync status says so and the wallet does not retry.
 - **Units.** NIGHT has 6 decimals (smallest unit STAR) and DUST has 15
   (smallest unit SPECK). Other tokens have no decimals unless you label them.
+
+## Your own networks
+
+The network menu's **Add a network…** defines a network beside the four built-in
+ones. Its form has:
+
+| Field | Meaning |
+| --- | --- |
+| Name | shown in the network menu; 1 to 32 characters, unique |
+| Network id | as the chain's addresses carry it (`undeployed` in `mn_addr_undeployed1…`): letters, digits 1 to 9 and hyphens, or `mainnet`, the SDK address codec's rule |
+| Indexer HTTP, Indexer WebSocket | the indexer's GraphQL endpoints |
+| Transactions go to | a **Midnight node** (its WebSocket RPC: the SDK submits, as on the built-in networks) or an **HTTP endpoint** (a submit URL, see [HTTP submission](#http-submission)) |
+| This network has DUST | on by default; off for a chain without DUST, where nothing pays a fee |
+
+Every URL is typed in full: nothing is derived from another. A URL the page
+policy would block (plain `http:` or `ws:` to a host other than `localhost` or
+`127.0.0.1`) is refused in the form with that reason; the policy is not
+widened.
+
+- **Storage.** A definition is stored in `mdwa-settings` under a key of its
+  own (`user-` and 12 hex digits, also its database's name), not its network
+  id, since two networks may share one (two local chains are both
+  `undeployed`). Each network is its own wallet, as the built-in ones are.
+- **Editing and removing.** **Edit network** (Settings, or the welcome screen of
+  a network without a wallet) changes everything but the network id, which the
+  wallet's addresses are made with. A network can be removed once its wallet is
+  (Settings, Danger zone). Added networks show in a neutral color.
+- **The chain's identity.** When a network is added, the wallet reads the hash
+  of the chain's first block from its indexer
+  (`block(offset: { height: 0 }) { hash }`) and stores it. Every start, and
+  every edit, reads it again: another chain behind the same URLs is refused
+  with a message saying so, and the wallet does not retry.
+
+```mermaid
+flowchart LR
+  def["network definition"] --> sub{"transactions go to"}
+  sub -- "Midnight node" --> sdk["SDK submission<br/>(node WebSocket RPC)"]
+  sub -- "HTTP endpoint" --> http["POST submit URL<br/>(custom.js)"]
+  def --> dust{"has DUST"}
+  dust -- "yes" --> fast["SDK DUST wallet<br/>(projections sync)"]
+  dust -- "no" --> none["stand-in DUST wallet<br/>no fees"]
+```
+
+**Combinations.** The two switches are independent, and all four combinations
+work: a Midnight node with DUST is a Midnight network like the built-in ones;
+an HTTP endpoint without DUST suits a chain that has neither a node RPC nor
+fees; a Midnight node without DUST suits a local chain whose fee price is zero;
+an HTTP endpoint with DUST suits a Midnight chain reached through a relay. The
+only requirement is the indexer's: it must serve what the chosen switches use
+(below).
+
+### A network without DUST
+
+- **A stand-in DUST wallet.** The SDK's facade needs a DUST wallet and counts it
+  in "synced"; the real one would wait forever for DUST queries such a network
+  does not serve. The stand-in implements the SDK's DUST wallet interface: always
+  synced, at the protocol version where the facade's ledger-9 epoch starts, no
+  coins, a zero balance, zero fees, and the DUST address the seed derives (so
+  `getDustAddress` answers as elsewhere). Start, stop, revert and snapshots do
+  nothing; registering NIGHT or paying a fee in DUST is refused. It sends
+  nothing to the indexer.
+- **The start-up check** asks the indexer for `block`, `unshieldedTransactions`
+  and `zswapLedgerEvents` only; the DUST queries and DUST passes do not apply.
+- **No fees.** Every transfer and balance is built with `payFees: false`: the
+  popup's sends, and a site's `makeTransfer`, `makeIntent` and both balancing
+  methods, whatever the site asked.
+- **The popup** shows no DUST card, DUST page, DUST address, DUST sync row,
+  registration or fee line, and sync shows the shielded and unshielded wallets.
+
+### HTTP submission
+
+A network whose transactions go to an HTTP endpoint has no node URL: the SDK
+skips its check of the indexer against a node's finalized head, and
+`getConfiguration` reports the submit URL where the API asks for a node. The
+wallet POSTs each finalized transaction's bytes to the submit URL with
+`Content-Type: application/octet-stream` and reads the answer by what it proves
+about the transaction's inputs. This is the contract such an endpoint follows:
+
+| Answer | Means | The wallet |
+| --- | --- | --- |
+| 200, JSON `status` 0, `height` > 0 | applied in block `height` | resolves; sync sees it included |
+| 200, `status` 1, `height` > 0 | its guaranteed segment applied in block `height` | resolves; sync shows each segment's result |
+| 200, any other `status`, `height` > 0, `worker_rejected` false | failed in block `height`: nothing spent, nothing created | gives back the coins it booked at once, naming `status_name` |
+| 200, `worker_rejected` true | refused before any block | gives back the coins |
+| 400, 413, 415 | refused | gives back the coins |
+| 503 with `error` `submission_disabled` or `busy`, or 429 | nothing taken | gives back the coins, with a clear message |
+| 200 with `status_name` `panicked` or `outcome_unknown`, or no `height`; 502, 504, any other answer, no answer | it may or may not be in the chain | keeps the coins booked until sync sees it or it expires; the message gives `hash` when the answer has one |
+
+The facade gives coins back only for an error that proves no block holds the
+transaction's effects, so such an answer reaches it as the node client's
+`TransactionInvalidError` (or `ConnectionError` when nothing was taken) inside a
+`SubmissionError`. Inclusion is reported by the SDK's own polling of the
+indexer, as on any network. The request times out after 75 seconds.
 
 ## How sync works
 
@@ -139,7 +236,8 @@ sequenceDiagram
 ```
 
 - **Three wallets.** The SDK facade runs a shielded, an unshielded and a DUST
-  wallet from one seed. Each reads the chain its own way (below), reports its
+  wallet from one seed (on a network without DUST, the DUST wallet is a
+  stand-in, and the popup shows two). Each reads the chain its own way (below), reports its
   own progress, and the wallet counts as synced when the facade says so. The
   popup shows the three percentages separately and the mean in the header;
   while catching up, a figure never goes back. The indexer's latest block
@@ -430,7 +528,8 @@ chose it, and the page says so.
 The popup is 380 by 600 pixels, with light and dark themes and a network color
 for each network. It has:
 
-- a network switcher showing which networks have a wallet;
+- a network switcher showing which networks have a wallet, and **Add a
+  network…** for your own;
 - create and restore per network: 24 words for a new wallet, which starts at
   the current block, 12 to 24 for a restore with an optional wallet birthday
   date, and a password;
@@ -514,6 +613,7 @@ its arguments.
 
 | Command | Does |
 | --- | --- |
+| `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
 | `npm run smoke` | the engine's Midnight logic under Node against a real network: a fresh phrase born at the tip, sync, addresses, balances, snapshot and resume of all three parts; with a funded seed (scanned from the start), sends and DUST registration |
 | `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the WASM prover proves in a worker |
 | `npm run check:connector` | the built extension and the test dApp in a browser, through every connector method, answering the approval windows (`--prover server` proves with the proof server, `--profile-root` picks where its throwaway profile goes) |
@@ -592,6 +692,7 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
 | `extension/src/offscreen.js` | hosts and relays to the engine worker |
 | `extension/src/engine-worker.js` | the engine: state, sessions, snapshots, the `ui` and `connector` tables |
 | `extension/src/midnight.js` | everything that talks to the wallet SDK: facade (with the projections DUST sync and the birthday start), sync state, send, DUST, history, transaction descriptions, provers |
+| `extension/src/custom.js` | your own networks: their definition and chain identity, the stand-in DUST wallet, HTTP submission |
 | `extension/src/birthday.js` | the wallet birthday: dates to blocks, the shielded anchor and collapsed update, the indexer's query check |
 | `extension/src/connector.js` | the connector's engine side: balancing, previews, signing, proving transport |
 | `extension/src/tokens.js` | token labels and the watch-token check |
@@ -599,7 +700,7 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
 | `extension/src/db.js` | IndexedDB per network, and settings |
 | `extension/src/inject.js`, `content.js` | the page's connector object and its relay |
 | `extension/src/ui/` | popup and approval windows (React) |
-| `wallet/networks.mjs` | networks, default endpoints, Blockfrost URL handling, units |
-| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser and connector checks |
+| `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, the page policy check, Blockfrost URL handling, units |
+| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser, connector and custom-network checks |
 | `dapp/` | the local test dApp: `index.html`, `app.js`, `serve.mjs`, `compile.mjs`, `contract/counter.compact` |
 | `docs/` | this documentation and its screenshots |

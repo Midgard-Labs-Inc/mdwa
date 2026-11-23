@@ -1,9 +1,10 @@
 // Receive: the three addresses of this wallet, one at a time, each with a QR
-// code, the full address and a sentence on what it is for.
+// code, the full address and a sentence on what it is for. A network without
+// DUST shows no DUST address.
 import { useState } from 'react';
 import { CheckIcon, CopyIcon } from '@phosphor-icons/react';
 import { AddressQR, ActionFooter, NetworkPill, PageHeader, PrimaryButton, Screen, Segmented, Viewport, useCopy } from './components.jsx';
-import { networkName } from './format.js';
+import { hasDust, networkName } from './format.js';
 import { ScanStart } from './sync.jsx';
 
 const KINDS = [
@@ -15,13 +16,14 @@ const KINDS = [
 export function Receive({ state, onBack }) {
   const [kind, setKind] = useState('unshielded');
   const [copied, copy] = useCopy();
+  const kinds = hasDust(state) ? KINDS : KINDS.filter(k => k.value !== 'dust');
   const current = KINDS.find(k => k.value === kind);
   const address = state.addresses?.[kind];
   return (
     <Screen>
       <PageHeader title="Receive" onBack={onBack} />
       <Viewport gap="gap-3">
-        <Segmented label="Address type" options={KINDS} value={kind} onChange={setKind} />
+        <Segmented label="Address type" options={kinds} value={kind} onChange={setKind} />
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-kumo-hairline bg-kumo-base px-5 py-4">
           <NetworkPill network={state.network} name={networkName(state)} caret={false} />
           {address && <AddressQR value={address} />}
