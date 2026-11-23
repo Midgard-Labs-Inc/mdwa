@@ -3,16 +3,19 @@
 // the vault and IndexedDB, and answers the UI method table; the dApp
 // connector's table sits beside it under its own envelope kind.
 //
-// Networks are separate wallets: each has its own recovery phrase, password,
-// database and snapshots. Only the selected network syncs. Besides the
-// built-in networks there are the user's own (wallet/networks.mjs, custom.js),
-// kept in the settings.
+// One wallet for every network: the recovery phrase created or restored once
+// is sealed beside the settings (db.js) and is the wallet of every network,
+// built in or the user's (wallet/networks.mjs, custom.js), that has none of
+// its own. Each network keeps its own database: the addresses its network id
+// gives the seed, its birthday, snapshots and notes. A network that had a
+// wallet of its own before the wallet was shared keeps it, with its own
+// phrase and password, until it is removed. Only the selected network syncs.
 //
-// Unlocking is once per browser session: the password opens the sealed seed,
-// and the seeds of every network unlocked since stay in this worker's memory
-// until the user locks or the browser closes. While a network is locked
-// nothing syncs (the SDK needs the keys to read the chain), and its snapshot
-// stays encrypted.
+// Unlocking is once per browser session: the password opens the sealed seed
+// (the shared one, for every network that uses it, or a network's own), and
+// the seeds unlocked since stay in this worker's memory until the user locks
+// or the browser closes. While a network is locked nothing syncs (the SDK
+// needs the keys to read the chain), and its snapshot stays encrypted.
 import { firstValueFrom, filter, timeout } from 'rxjs';
 import {
   DEFAULT_NETWORK, checkedEndpoints, connectionUrls, defaultEndpoints, endpointsOf, network, networkIds, userNetworkKey,
@@ -38,12 +41,15 @@ const idleSync = () => ({
   start: null, refreshing: false,
 });
 const state = {
-  network: DEFAULT_NETWORK, networks: [], hasWallet: false, locked: false, addresses: null, birthday: null, birthdayNote: null,
+  network: DEFAULT_NETWORK, networks: [], hasWallet: false, ownWallet: false, sharedWallet: false, locked: false, addresses: null,
+  birthday: null, birthdayNote: null,
   sync: idleSync(), busy: null, waiting: [], prover: { kind: 'wasm', url: '' },
 };
 let store = db.forNetwork(DEFAULT_NETWORK);   // the selected network's database
 let userNetworks = {};                         // the user's network definitions, as stored in the settings
 const unlocked = new Map();                    // network -> { seedHex, key } for this browser session
+let sharedSeedHex = null;                      // the shared wallet's seed while it is unlocked
+const derivedAddresses = new Map();            // network -> the shared seed's addresses, before its record exists
 let session = null;                            // the running SDK wallet of the selected network
 let retryTimer = null, retryDelay = 2000;
 const previews = new Map();                    // id -> { kind, network, recipe, timer, ... }
@@ -73,27 +79,50 @@ const endpointsFor = async id => {
   return endpointsOf(network(id, userNetworks), endpoints[id]);
 };
 
+// A network's record is its own wallet unless it says it is the shared one's.
+const isOwn = record => !!record && !record.shared;
+
 async function wallet() {
   const w = await store.get('wallet');
-  if (!w) throw new Error(`No wallet on ${net().name}`);
-  return w;
+  if (w) return w;
+  if (!state.hasWallet) throw new Error(`No wallet on ${net().name}`);
+  // The shared wallet before its first session here (see openShared).
+  if (state.locked) throw lockedError();
+  return { shared: true, addresses: state.addresses };
+}
+
+/** The shared seed's addresses on network `id`, derived once per unlock. */
+function derived(id, seedHex) {
+  if (!derivedAddresses.has(id)) derivedAddresses.set(id, midnight.deriveAddresses(vault.fromHex(seedHex), network(id, userNetworks)));
+  return derivedAddresses.get(id);
 }
 
 async function reflect() {
-  const w = await store.get('wallet');
-  state.network = store.network;
-  state.hasWallet = !!w;
-  state.locked = !!w && !unlocked.has(store.network);
-  state.addresses = w ? { unshielded: w.addresses.unshielded, shielded: w.addresses.shielded, dust: w.addresses.dust } : null;
+  const here = store;
+  const w = await here.get('wallet');
+  const own = isOwn(w);
+  state.network = here.network;
+  state.sharedWallet = !!(await db.getSeed());
+  state.ownWallet = own;
+  state.hasWallet = own || state.sharedWallet;
+  // The shared wallet, once unlocked, is unlocked on every network that uses it.
+  if (!own && state.sharedWallet && sharedSeedHex && !unlocked.has(here.network)) {
+    unlocked.set(here.network, { seedHex: sharedSeedHex, key: await vault.recordKey(sharedSeedHex, here.network) });
+  }
+  state.locked = state.hasWallet && !unlocked.has(here.network);
+  // A network the shared wallet has not opened on yet has no record: its
+  // addresses are derived while unlocked until its first session stores them.
+  const addresses = w?.addresses ?? (state.hasWallet && !state.locked ? derived(here.network, unlocked.get(here.network).seedHex) : null);
+  state.addresses = addresses ? { unshielded: addresses.unshielded, shielded: addresses.shielded, dust: addresses.dust } : null;
   // Wallets made before birthdays existed have none: they scan from the start.
   state.birthday = w?.birthday ?? null;
   state.birthdayNote = w?.birthdayNote ?? null;
-  state.prover = (await endpointsFor(store.network)).prover;
+  state.prover = (await endpointsFor(here.network)).prover;
   state.networks = await Promise.all(networkIds(userNetworks).map(async id => {
     const n = network(id, userNetworks);
+    const ownWallet = id === here.network ? own : isOwn(await db.forNetwork(id).get('wallet'));
     return {
-      id, name: n.name, networkId: n.networkId, user: n.user, dust: n.dust,
-      hasWallet: id === store.network ? !!w : !!(await db.forNetwork(id).get('wallet')),
+      id, name: n.name, networkId: n.networkId, user: n.user, dust: n.dust, ownWallet, hasWallet: ownWallet || state.sharedWallet,
     };
   }));
 }
@@ -165,12 +194,18 @@ async function startSession() {
     // behind the same URLs is refused rather than synced as this wallet.
     if (n.user) await custom.checkChain(n, urls.indexerHttp);
     const keys = unlocked.get(n.id);
+    let record = await store.get('wallet');
+    if (!record) {
+      record = await openShared(n, urls.indexerHttp, keys.seedHex);
+      if (run.stopped) return;
+      await reflect();
+      publish();
+    }
     const stored = await store.get('snapshot');
     let resume = null;
     if (stored && stored.indexerHttp === endpoints.indexerHttp) resume = await vault.decryptJson(keys.key, stored.box);
-    const record = await store.get('wallet');
     run.wallet = await midnight.openWallet({
-      net: n, endpoints, seed: vault.fromHex(keys.seedHex), snapshot: resume, birthday: record?.birthday ?? null,
+      net: n, endpoints, seed: vault.fromHex(keys.seedHex), snapshot: resume, birthday: record.birthday ?? null,
     });
     if (run.stopped) { await run.wallet.stop().catch(() => {}); return; }
     state.sync.start = {
@@ -396,14 +431,15 @@ async function withBusy(kind, stage, fn, { wait = false, ticket = null } = {}) {
 
 // ---------------------------------------------------------------- wallet ---
 /**
- * Where a new or restored wallet's shielded sync starts: `{ birthday, note }`
- * with `birthday` null for the start of the chain (see birthday.js). A new
- * wallet (`restore` false) is born at the chain's tip: its phrase was made
- * just now, so nothing can have been sent to it before. If the indexer
- * cannot say where the tip is, it is born at the start instead (correct, only
- * slower) and `note` says why. A restored wallet is born at `date`
- * (YYYY-MM-DD) or, without one, at the start; a date the indexer cannot
- * place is refused, since the user asked for it.
+ * Where a new or restored wallet's shielded sync starts on the network it is
+ * created on: `{ birthday, note }` with `birthday` null for the start of the
+ * chain (see birthday.js). A new wallet (`restore` false) is born at the
+ * chain's tip: its phrase was made just now, so nothing can have been sent to
+ * it before. If the indexer cannot say where the tip is, it is born at the
+ * start instead (correct, only slower) and `note` says why. A restored wallet
+ * is born at `date` (YYYY-MM-DD) or, without one, at the start; a date the
+ * indexer cannot place is refused, since the user asked for it. Networks the
+ * wallet opens on later are placed by openShared.
  */
 async function birthdayFor(restore, date) {
   if (restore && !date) return { birthday: null, note: null };
@@ -415,38 +451,77 @@ async function birthdayFor(restore, date) {
     return { birthday: null, note: `The chain tip could not be read (${error.message}), so the wallet scans from the start of the chain` };
   }
   try {
-    return { birthday: await birthdays.birthdayBlock(indexerHttp, restore ? date : null), note: null };
+    return { birthday: await birthdays.birthdayBlock(indexerHttp, restore ? birthdays.birthdayInstant(date) : null), note: null };
   } catch (error) {
     if (restore) throw new Error(`The indexer could not place the wallet birthday: ${error.message}`);
     return { birthday: null, note: `The chain tip could not be read (${error.message}), so the wallet scans from the start of the chain` };
   }
 }
 
+/**
+ * Creates or restores the shared wallet, which every network without a
+ * wallet of its own then uses. It is opened on the selected network at once;
+ * the seed's record says when it was created and, for a restore, the date
+ * given, so that openShared can place its birthday on the other networks.
+ */
 async function createWallet({ mnemonic, password, restore = false, birthday: date = null }) {
-  if (await store.get('wallet')) throw new Error(`A wallet already exists on ${net().name}`);
+  if (isOwn(await store.get('wallet')) || await db.getSeed()) throw new Error(`A wallet already exists on ${net().name}`);
   if (!password || password.length < 8) throw new Error('Use a password of at least 8 characters');
+  const createdAt = Date.now();
   const seed = await midnight.seedFromMnemonic(mnemonic);
   const seedHex = vault.toHex(seed);
   const addresses = midnight.deriveAddresses(seed, net());
   const { birthday, note } = await birthdayFor(!!restore, date || null);
   const sealed = await vault.seal(seedHex, password);
+  await db.putSeed({ sealed, createdAt, restored: !!restore, date: (restore && date) || null });
   await store.put('wallet', {
-    network: store.network, sealed, addresses, createdAt: Date.now(), birthday, ...(note ? { birthdayNote: note } : {}),
+    network: store.network, shared: true, addresses, createdAt, birthday, ...(note ? { birthdayNote: note } : {}),
   });
   await store.delete('snapshot');
   await store.delete('txmeta');
-  unlocked.set(store.network, { seedHex, key: await vault.recordKey(seedHex, store.network) });
+  sharedSeedHex = seedHex;
   await reflect();
   publish();
   startSession();
   return snapshot();
 }
 
+/**
+ * Writes the record of a network the shared wallet opens on for the first
+ * time: its addresses and its birthday there. A phrase created on another
+ * network is born at the last block at or before its creation (funds may
+ * have reached this network's address since); a restored one at the date the
+ * user gave, or at the start without one. A time the indexer cannot place is
+ * refused, as a restore's date is: the session fails, says why, and tries
+ * again.
+ */
+async function openShared(n, indexerHttp, seedHex) {
+  const seed = await db.getSeed();
+  if (!seed) throw new Error(`No wallet on ${n.name}`);
+  const at = seed.restored ? (seed.date ? birthdays.birthdayInstant(seed.date) : null) : seed.createdAt;
+  let birthday = null;
+  if (at !== null) {
+    try { birthday = await birthdays.birthdayBlock(indexerHttp, at); } catch (error) {
+      throw new Error(`The indexer could not place the wallet birthday: ${error.message}`);
+    }
+  }
+  const record = { network: n.id, shared: true, addresses: derived(n.id, seedHex), createdAt: Date.now(), birthday };
+  await db.forNetwork(n.id).put('wallet', record);
+  return record;
+}
+
+/** Opens the selected network's own wallet, or the shared one for every network that uses it. */
 async function unlock({ password }) {
-  const w = await wallet();
-  if (!unlocked.has(store.network)) {
-    const seedHex = await vault.open(w.sealed, password);
-    unlocked.set(store.network, { seedHex, key: await vault.recordKey(seedHex, store.network) });
+  const w = await store.get('wallet');
+  if (isOwn(w)) {
+    if (!unlocked.has(store.network)) {
+      const seedHex = await vault.open(w.sealed, password);
+      unlocked.set(store.network, { seedHex, key: await vault.recordKey(seedHex, store.network) });
+    }
+  } else if (!sharedSeedHex) {
+    const seed = await db.getSeed();
+    if (!seed) throw new Error(`No wallet on ${net().name}`);
+    sharedSeedHex = await vault.open(seed.sealed, password);
   }
   await reflect();
   publish();
@@ -457,6 +532,8 @@ async function unlock({ password }) {
 async function lock() {
   await stopSession({ save: true });
   unlocked.clear();
+  sharedSeedHex = null;
+  derivedAddresses.clear();
   await reflect();
   publish();
   return snapshot();
@@ -477,14 +554,37 @@ async function selectNetwork({ network: id }) {
   return snapshot();
 }
 
+/**
+ * Removes the selected network's own wallet, after which the network uses
+ * the shared one; or the shared wallet, with every network's data that
+ * belonged to it. Networks with a wallet of their own keep it.
+ */
 async function resetWallet({ password }) {
-  const w = await wallet();
-  await vault.open(w.sealed, password);   // throws Wrong password
+  const w = await store.get('wallet');
+  const own = isOwn(w);
+  const seed = own ? null : await db.getSeed();
+  if (!own && !seed) throw new Error(`No wallet on ${net().name}`);
+  await vault.open(own ? w.sealed : seed.sealed, password);   // throws Wrong password
   await stopSession({ save: false });
-  await store.clear();
-  unlocked.delete(store.network);
+  if (own) {
+    await store.clear();
+    unlocked.delete(store.network);
+  } else {
+    for (const id of networkIds(userNetworks)) {
+      const other = db.forNetwork(id);
+      if (isOwn(await other.get('wallet'))) continue;
+      await other.clear();
+      unlocked.delete(id);
+    }
+    // The seed goes last: a removal cut short leaves networks that open
+    // again with it, never records without their seed.
+    await db.deleteSeed();
+    sharedSeedHex = null;
+    derivedAddresses.clear();
+  }
   await reflect();
   publish();
+  startSession();
   return snapshot();
 }
 
@@ -571,13 +671,15 @@ async function saveNetwork({ network: id = null, ...fields }) {
   return { network: key };
 }
 
-/** Removes a user network that has no wallet (its wallet is removed first,
- *  with its password, in Settings). */
+/** Removes a user network and its data. A wallet of the network's own is
+ *  removed first, with its password, in Settings; the shared wallet stays. */
 async function removeNetwork({ network: id }) {
   const n = network(id, userNetworks);
   if (!n.user) throw new Error(`${n.name} is built in`);
-  if (await db.forNetwork(id).get('wallet')) throw new Error(`Remove the ${n.name} wallet first (Settings, Danger zone)`);
+  if (isOwn(await db.forNetwork(id).get('wallet'))) throw new Error(`Remove the ${n.name} wallet first (Settings, Danger zone)`);
+  if (store.network === id) await stopSession({ save: false });
   await db.forNetwork(id).clear();
+  unlocked.delete(id);
   const s = await db.getSettings();
   const networks = { ...s.networks }, endpoints = { ...s.endpoints };
   delete networks[id];

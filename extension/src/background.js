@@ -92,7 +92,7 @@ async function engine(kind, method, params) {
 }
 
 // ------------------------------------------------------------ permissions ---
-// Each network is a separate wallet, so a site is approved per network:
+// A site is approved per network (each network has its own addresses):
 //   sites: { [network]: { [origin]: { grantedAt, permissions: [methodName] } } }
 // The dApp connector adds and reads entries; the UI lists and removes them.
 async function sitesByNetwork() {
@@ -110,6 +110,15 @@ async function forgetSite(origin, network) {
 }
 async function forgetNetwork(network) {
   await updateSites(sites => { delete sites[network]; });
+}
+// The networks whose approvals a UI call ends, if it succeeds: a removed
+// network's, a network's own removed wallet's, or the removed shared
+// wallet's on every network that used it. A new wallet starts without them.
+async function approvalsEndedBy(method, params) {
+  if (method === 'removeNetwork') return [params.network];
+  if (method !== 'resetWallet') return [];
+  const s = await engine('ui', 'state');
+  return s.ownWallet ? [s.network] : s.networks.filter(n => !n.ownWallet).map(n => n.id);
 }
 
 // Every change to `sites` goes through this chain, so two requests updating
@@ -380,10 +389,13 @@ async function call(session, origin, { connectionId, method, args = [] }) {
       return null;
     }
     case 'getConfiguration':
+      return engine('connector', method, { origin });
+    // Stored addresses are answered while locked too; those of the shared
+    // wallet on a network it has not opened on yet need an unlock.
     case 'getShieldedAddresses':
     case 'getUnshieldedAddress':
     case 'getDustAddress':
-      return engine('connector', method, { origin });
+      return walletCall(method, {}, origin);
     case 'getShieldedBalances':
     case 'getUnshieldedBalances':
     case 'getDustBalance':
@@ -487,10 +499,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     const run = Object.hasOwn(local, method)
       ? local[method](message.params ?? {})
       : (async () => {
-        // A removed wallet's dApp approvals must not carry over to a new one.
-        const network = method === 'resetWallet' ? (await engine('ui', 'state')).network : null;
+        const ended = await approvalsEndedBy(method, message.params ?? {});
         const result = await engine('ui', method, message.params ?? {});
-        if (network) await forgetNetwork(network);
+        for (const network of ended) await forgetNetwork(network);
         return result;
       })();
     run.then(

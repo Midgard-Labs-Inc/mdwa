@@ -107,11 +107,17 @@ export function endpointsOf(n, stored) {
   };
 }
 
+/** Whether `url` is served by Blockfrost, which wants a project id. */
+const onBlockfrost = url => /(^|\.)blockfrost\.io$/.test(new URL(url).hostname);
+
 /** The URLs to connect with: the Blockfrost project id goes onto every one.
- *  Throws the message the sync status shows when a Blockfrost network has no id. */
+ *  Throws the message the sync status shows when a Blockfrost network has no
+ *  id while one of its endpoints is still on Blockfrost: a network pointed at
+ *  the user's own node and indexer needs none. */
 export function connectionUrls(n, endpoints) {
   const e = endpointsOf(n, endpoints);
-  if (n.blockfrost && !e.projectId) throw new Error('Add a Blockfrost project id in Settings');
+  const needsId = n.blockfrost && [e.node ?? e.submitUrl, e.indexerHttp, e.indexerWs].some(onBlockfrost);
+  if (needsId && !e.projectId) throw new Error('Add a Blockfrost project id in Settings');
   const withId = url => {
     if (!e.projectId) return url;
     const u = new URL(url);

@@ -2,16 +2,24 @@
 // their workers only get chrome.runtime, so everything durable lives here,
 // not in chrome.storage.
 //
-// One database per network (mdwa-<network>), so each network has its own
-// wallet. Its one object store, `meta`, holds:
-//   wallet:   { network, sealed, addresses, createdAt } (sealed: vault.js)
+// One database per network (mdwa-<network>) for what belongs to that network.
+// Its one object store, `meta`, holds:
+//   wallet:   { network, shared: true, addresses, createdAt, birthday } for a
+//             network the shared wallet has opened on, or, for a wallet of
+//             the network's own (made before the wallet was shared),
+//             { network, sealed, addresses, createdAt, birthday } (sealed: vault.js)
 //   snapshot: the SDK wallets' serialized state, the transaction history and
 //             the lifecycle records, encrypted with the seed's record key
 //   txmeta:   what the wallet knows about transactions it made itself (kind,
 //             dApp origin), encrypted the same way; kept across a rescan
 //   tokenLabels: the user's names for custom tokens (tokens.js), in the
 //             clear so they read the same locked or unlocked
-// Settings shared by all networks live in mdwa-settings.
+// Settings shared by all networks live in mdwa-settings, and so does the
+// wallet every network without one of its own uses (see engine-worker.js):
+//   seed:     { sealed, createdAt, restored, date }: the sealed seed, when it
+//             was created or restored, and for a restore the birthday date
+//             the user gave (null for none), so its birthday can be placed
+//             on a network it first opens on later
 const SETTINGS_DB = 'mdwa-settings';
 const opened = new Map();
 
@@ -62,3 +70,8 @@ export async function getSettings() {
 export async function putSettings(settings) {
   return settingsStore.put('settings', settings);
 }
+
+// ---------------------------------------------------------- shared seed ---
+export const getSeed = async () => (await settingsStore.get('seed')) ?? null;
+export const putSeed = seed => settingsStore.put('seed', seed);
+export const deleteSeed = () => settingsStore.delete('seed');

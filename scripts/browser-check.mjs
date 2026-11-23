@@ -2,7 +2,8 @@
 // Runs the built extension in a real browser under automation and checks the
 // engine end to end: it boots, its WASM loads under the extension's CSP, the
 // background answers ui('state'), a fresh wallet on Preview syncs, lock and
-// unlock work, and the SDK's WASM prover proves a transaction in a worker.
+// unlock work, the same wallet opens on Preprod without a password, removing
+// it works, and the SDK's WASM prover proves a transaction in a worker.
 //
 //   npm run build:extension && node scripts/browser-check.mjs [--browser /path/to/Chromium] [--only-prove | --only-devnet]
 //
@@ -165,16 +166,16 @@ try {
     log('prover restored', JSON.stringify(back.prover));
     await untilSynced('after settings', 5 * 60 * 1000);
 
-    log('Blockfrost network without a project id: a second wallet on Preprod');
+    log('Blockfrost network without a project id: the same wallet on Preprod, without a password');
     await must('selectNetwork', { network: 'preprod' });
-    await must('createWallet', { mnemonic: (await must('generateMnemonic')).words.join(' '), password, restore: false });
+    log('createWallet where the wallet exists ->', JSON.stringify((await ui('createWallet', { mnemonic: words.join(' '), password, restore: false })).error));
     await wait(1000);
     log('preprod state', JSON.stringify(short(await must('state'))));
+    await must('selectNetwork', { network: 'preview' });
+    await untilSynced('back on preview', 5 * 60 * 1000);
     log('resetWallet with a wrong password ->', JSON.stringify((await ui('resetWallet', { password: 'wrong password' })).error));
     const reset = await must('resetWallet', { password });
     log('resetWallet', JSON.stringify(short(reset)), JSON.stringify(reset.networks));
-    await must('selectNetwork', { network: 'preview' });
-    await untilSynced('back on preview', 5 * 60 * 1000);
   }
 
   if (args['devnet-seed']) {

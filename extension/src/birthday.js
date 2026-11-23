@@ -77,17 +77,15 @@ export function birthdayInstant(date, now = Date.now()) {
  * The birthday block of a wallet, as `{ height, time }` (`time` the block's
  * timestamp in ms), or null for "from the start of the chain".
  *
- * Without `date`, the chain's tip (a wallet created now). With a date
- * (YYYY-MM-DD), the last block at or before 00:00 UTC of that day (see
- * birthdayInstant): a day before the chain's first block means the start; a
- * day after the tip means the tip.
+ * Without `instant`, the chain's tip (a wallet created now). With an instant
+ * (ms: a restore's date through birthdayInstant, or when a phrase was
+ * created), the last block at or before it: an instant before the chain's
+ * first block means the start; one after the tip means the tip.
  */
-export async function birthdayBlock(indexerHttp, date = null) {
+export async function birthdayBlock(indexerHttp, instant = null) {
   const tip = await block(indexerHttp);
   if (!tip) return null;   // a chain without blocks: nothing to skip
-  if (date === null) return { height: tip.height, time: tip.timestamp };
-  const instant = birthdayInstant(date);
-  if (tip.timestamp <= instant) return { height: tip.height, time: tip.timestamp };
+  if (instant === null || tip.timestamp <= instant) return { height: tip.height, time: tip.timestamp };
   const first = await block(indexerHttp, 0);
   if (!first || first.timestamp > instant) return null;
   // The first block after the instant, then the one before it. Block
