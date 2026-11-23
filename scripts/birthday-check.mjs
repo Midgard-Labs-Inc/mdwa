@@ -7,10 +7,12 @@
 //
 // Covered: a new wallet at the tip; an instant (when a phrase was created, as
 // the wallet's later networks use, or a restore's date) at the last block at
-// or before it, the start before the first block, the tip after it.
+// or before it, the start before the first block, the tip after it; which
+// instant the shared wallet's later networks use: a date stored with the seed
+// (a restore's or a rescan's) over when a created phrase was made.
 import { createServer } from 'node:http';
 import assert from 'node:assert/strict';
-import { birthdayBlock, birthdayInstant } from '../extension/src/birthday.js';
+import { birthdayBlock, birthdayInstant, sharedInstant } from '../extension/src/birthday.js';
 
 let checks = 0;
 const ok = async (label, fn) => { await fn(); checks++; console.log(`ok  ${label}`); };
@@ -42,6 +44,13 @@ await ok('a creation time before the first block is the start, one after the tip
 await ok('a restore date is placed by the same lookup, from 00:00 UTC', async () => {
   assert.equal(await birthdayBlock(indexer, birthdayInstant('2026-01-01')), null);
   assert.deepEqual(await birthdayBlock(indexer, birthdayInstant('2026-01-02')), at(TIP));
+});
+await ok('the shared wallet\'s later networks use its stored date, created or restored', async () => {
+  const createdAt = blockOf(7).timestamp;
+  assert.equal(sharedInstant({ restored: false, createdAt, date: null }), createdAt);
+  assert.equal(sharedInstant({ restored: true, createdAt, date: null }), null);
+  assert.equal(sharedInstant({ restored: false, createdAt, date: '2026-01-02' }), birthdayInstant('2026-01-02'));
+  assert.equal(sharedInstant({ restored: true, createdAt, date: '2026-01-02' }), birthdayInstant('2026-01-02'));
 });
 
 server.close();

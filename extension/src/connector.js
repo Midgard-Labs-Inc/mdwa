@@ -102,12 +102,17 @@ export function makeConnector(engine) {
   }
 
   // A dApp request may come right after an unlock, while the wallet resumes
-  // from its snapshot: wait for sync longer than the popup does.
-  async function synced() {
+  // from its snapshot: wait for sync longer than the popup does. `stage`
+  // (withBusy's) shows the wait as 'syncing', with the sync's percentage
+  // beside it, and then 'balancing'; a DUST refresh pass is not shown as one.
+  async function synced(stage) {
+    const now = await live().catch(() => null);
+    if (!now?.s.isSynced && !state.sync.refreshing) stage('syncing');
     const { wallet } = await ready();
     const s = await firstValueFrom(wallet.facade.state().pipe(filter(x => x.isSynced), timeout(SYNC_WAIT_MS))).catch(() => {
       throw new Error('The wallet is still syncing: try again when it is synced');
     });
+    stage('balancing');
     return { wallet, s };
   }
 
@@ -145,8 +150,8 @@ export function makeConnector(engine) {
    *  the recipe as a preview and returns its id with the description.
    *  `action` is what the request is: 'balance', 'transfer' or 'offer'. */
   async function prepare(origin, action, ticket, build) {
-    return withBusy('dapp', 'balancing', async () => {
-      const { wallet, s } = await synced();
+    return withBusy('dapp', 'balancing', async stage => {
+      const { wallet, s } = await synced(stage);
       let built;
       try { built = await build(wallet); } catch (error) { throw classify(error); }
       let described;

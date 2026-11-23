@@ -74,6 +74,18 @@ export function birthdayInstant(date, now = Date.now()) {
 }
 
 /**
+ * The instant the shared wallet's birthday is placed at on a network it
+ * opens on for the first time, from its seed record (db.js): the date stored
+ * with it whenever there is one (a restore's, or the latest rescan from a
+ * date), for a restored phrase and a created one alike; without one, when a
+ * created phrase was made, or null (the start of the chain) for a restore.
+ */
+export function sharedInstant({ restored, createdAt, date }) {
+  if (date) return birthdayInstant(date);
+  return restored ? null : createdAt;
+}
+
+/**
  * The birthday block of a wallet, as `{ height, time }` (`time` the block's
  * timestamp in ms), or null for "from the start of the chain".
  *

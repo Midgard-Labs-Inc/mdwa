@@ -262,12 +262,23 @@ sequenceDiagram
   After a browser restart the wallets restore from it and read only what is
   new. A snapshot whose history the SDK cannot read is ignored as a whole; a
   wallet part the SDK will not restore starts afresh on its own.
-- **Rescan.** Settings, History has two. **Rescan** deletes the snapshot and
-  syncs again, the shielded wallet from the wallet birthday. **Rescan from the
-  start of the chain** (shown when the wallet has a birthday) also removes the
+- **Rescan.** Settings, History has three. **Rescan** deletes the snapshot and
+  syncs again, the shielded wallet from the wallet birthday. **Rescan from a
+  date** first places the birthday on the selected network at a date, with the
+  restore form's field and rules (see [Which birthday](#what-each-wallet-downloads));
+  a date the indexer cannot place is refused and nothing changes. For the
+  shared wallet the date is also stored with the seed, so the networks it
+  opens on later are placed by it; the networks it has opened on keep their
+  birthday until they are rescanned from a date themselves. **Rescan from the
+  start of the chain** (shown when the wallet has a birthday) removes the
   birthday, for a wallet that received shielded tokens before it; it downloads
   the chain's whole shielded history. The wallet's notes about transactions it
-  made itself are kept by both.
+  made itself are kept by all three.
+- **Waiting for sync.** A send, a DUST action or a dApp request is balanced
+  against a synced wallet. While the wallet still reads the chain first (up to
+  10 seconds for the popup, 3 minutes for a dApp, then the request fails),
+  the busy indicator and the approval window say so, with the sync
+  percentage, instead of "Balancing".
 - **Failures.** If the connection fails, the engine retries after 2 seconds,
   doubling up to 60 seconds. The status shows the error in the meantime. An
   indexer that says (through GraphQL introspection) that it lacks a query the
@@ -363,10 +374,11 @@ flowchart TD
   is refused. Wallets made before birthdays existed have none and keep the full
   history their snapshots already hold.
 - **On the other networks.** The wallet places its birthday on a network the
-  first time it opens there: a new phrase at the last block at or before the
-  moment it was created (funds may have reached that network's address since),
-  a restored one at its date on every network, or the start of the chain
-  without one. The same indexer lookup as a restore's date is used, and a time
+  first time it opens there: at the date stored with the seed whenever there
+  is one (a restore's, or the latest rescan from a date); otherwise a new
+  phrase at the last block at or before the moment it was created (funds may
+  have reached that network's address since), a restored one at the start of
+  the chain. The same indexer lookup as a restore's date is used, and a time
   the indexer cannot place is not guessed: Chain sync shows why, and the
   wallet tries again.
 - **Fallbacks.** A chain with no zswap output by the birthday has nothing to
@@ -435,8 +447,9 @@ the start of the chain as before.
   IV. The password is at least 8 characters. The recovery phrase itself is
   never stored; the wallet cannot show it again.
 - **Where it is kept.** The sealed seed is stored once, in `mdwa-settings`
-  (key `seed`), with when it was created and, for a restore, the birthday date
-  given, so its birthday can be placed on a network it opens on later. Each
+  (key `seed`), with when it was created and the birthday date given to a
+  restore or to the latest rescan from a date, so its birthday can be placed
+  on a network it opens on later. Each
   network's database holds that network's record: its three addresses, its
   birthday and a mark that it uses this seed; no copy of the seed.
 - **Records.** What the wallet knows about itself says which coins it owns:
@@ -609,7 +622,7 @@ for each network. It has:
   per page, with a detail page and the serialized transaction), **Token**,
   **Sites** (each approved site, its network, the permissions granted to it, and
   Disconnect) and **Settings** (connection, proving, lock, rescan from the
-  birthday or from the start of the chain, remove wallet).
+  birthday, from a date or from the start of the chain, remove wallet).
 
 Approval windows (440 by 680 pixels) are separate browser windows opened by the
 background; see [dApp connector](dapp-connector.md#approval-windows).
@@ -679,7 +692,7 @@ its arguments.
 | Command | Does |
 | --- | --- |
 | `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
-| `npm run check:birthday` | where a wallet birthday lands, under Node against an in-process stub indexer: a new wallet at the tip, a creation time or a restore's date at the last block at or before it, the start and the tip at either end |
+| `npm run check:birthday` | where a wallet birthday lands, under Node against an in-process stub indexer: a new wallet at the tip, a creation time or a restore's date at the last block at or before it, the start and the tip at either end, the stored date first on the shared wallet's later networks |
 | `npm run check:rewind` | an indexer's `CHAIN_REWOUND`, under Node against an in-process stub of its GraphQL WebSocket: the SDK's unshielded sync, wrapped as the wallet wraps it, stops quietly and tells the engine once; any other error still fails it for the SDK's retry |
 | `npm run smoke` | the engine's Midnight logic under Node against a real network: a fresh phrase born at the tip, sync, addresses, balances, snapshot and resume of all three parts; with a funded seed (scanned from the start), sends and DUST registration |
 | `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the same wallet opens on Preprod without a password, removing it works, the WASM prover proves in a worker |

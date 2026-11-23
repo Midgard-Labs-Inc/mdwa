@@ -1,6 +1,7 @@
 // Send: recipients with a token and an amount each, then a review of what the
 // engine prepared. The wallet is already unlocked, so sending needs no
-// password; the engine reports Balancing, Proving and Submitting in `busy`.
+// password; the engine reports waiting for its sync, Balancing, Proving and
+// Submitting in `busy`.
 // On a network without DUST there is no fee, so none is mentioned.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CaretDownIcon, ClockCounterClockwiseIcon, PaperPlaneTiltIcon, PlusIcon, XIcon } from '@phosphor-icons/react';
@@ -257,7 +258,7 @@ export function Send({ state, overview, onBack, onDone }) {
         <PageHeader title="Review" onBack={edit} />
         <Viewport>
           <Review preview={preview} labels={labels} withDust={hasDust(state)} />
-          {busy === 'send' && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy)} />}
+          {busy === 'send' && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy, state.sync)} />}
           {error && <Banner size="sm" variant="error" description={error} />}
         </Viewport>
         <ActionFooter
@@ -283,6 +284,7 @@ export function Send({ state, overview, onBack, onDone }) {
             {night(overview.night.pending)} NIGHT is held by a transaction or swap offer that has not settled yet. It can be sent once it has.
           </p>
         )}
+        {busy === 'review' && state.busy && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy, state.sync)} />}
         {error && <Banner size="sm" variant="error" description={error} />}
         {hasDust(state) && <p className="text-[11px] leading-normal text-kumo-subtle">The network fee is paid in DUST, not in the token you send.</p>}
       </Viewport>

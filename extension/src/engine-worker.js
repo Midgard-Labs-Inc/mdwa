@@ -376,15 +376,19 @@ async function live() {
   return { run: session, wallet: session.wallet, s };
 }
 
-async function synced() {
+/** The running wallet once it is synced, waiting up to 10 seconds; `stage`
+ *  (withBusy's) shows the wait as 'syncing' and then 'balancing'. */
+async function synced(stage) {
   const { run, wallet: w } = await live();
   // A DUST refresh pass (see onState) does not hold up a transaction: until
   // the pass ends, the DUST state is the one the previous pass applied, which
   // is what the transaction would be balanced against without it.
   if (!run.latest?.isSynced && !(run.everSynced && midnight.onlyDustBehind(run.latest))) {
+    stage('syncing');
     await firstValueFrom(w.facade.state().pipe(filter(s => s.isSynced), timeout(10000))).catch(() => {
       throw new Error('Wait until the wallet is synced');
     });
+    stage('balancing');
   }
   return live();
 }
@@ -521,17 +525,19 @@ async function createWallet({ mnemonic, password, restore = false, birthday: dat
 
 /**
  * Writes the record of a network the shared wallet opens on for the first
- * time: its addresses and its birthday there. A phrase created on another
- * network is born at the last block at or before its creation (funds may
- * have reached this network's address since); a restored one at the date the
- * user gave, or at the start without one. A time the indexer cannot place is
+ * time: its addresses and its birthday there. Whenever a date is stored with
+ * the seed (the date a restore gave, or the latest rescan from a date), the
+ * wallet is born at that date, whether its phrase was restored or created.
+ * Without one, a phrase created on another network is born at the last block
+ * at or before its creation (funds may have reached this network's address
+ * since), and a restored one at the start. A time the indexer cannot place is
  * refused, as a restore's date is: the session fails, says why, and tries
  * again.
  */
 async function openShared(n, indexerHttp, seedHex) {
   const seed = await db.getSeed();
   if (!seed) throw new Error(`No wallet on ${n.name}`);
-  const at = seed.restored ? (seed.date ? birthdays.birthdayInstant(seed.date) : null) : seed.createdAt;
+  const at = birthdays.sharedInstant(seed);
   let birthday = null;
   if (at !== null) {
     try { birthday = await birthdays.birthdayBlock(indexerHttp, at); } catch (error) {
@@ -625,16 +631,25 @@ async function resetWallet({ password }) {
  * Syncs the wallet again without its snapshot. The shielded wallet starts at
  * the wallet birthday again; with `fromStart` the birthday is removed first,
  * so it scans the whole chain (for a birthday that turned out to be later
- * than the wallet's first shielded coin).
+ * than the wallet's first shielded coin). With `date` (YYYY-MM-DD) the
+ * birthday is placed at that date first, as a restore's is (a date the
+ * indexer cannot place is refused, and nothing changes). For the shared
+ * wallet the date is also stored with the seed, so the networks it opens on
+ * later are placed by it (see openShared); the networks it has opened on
+ * keep theirs. A network's own wallet changes only its own record.
  */
-async function rescan({ fromStart = false } = {}) {
+async function rescan({ fromStart = false, date = null } = {}) {
   await live().catch(error => { if (error.locked || !state.hasWallet) throw error; });
+  const placed = date ? (await birthdayFor(true, date)).birthday : null;
   await stopSession({ save: false });
-  if (fromStart) {
-    const record = { ...(await wallet()), birthday: null };
+  // A network the shared wallet has not opened on yet has no record:
+  // openShared places it by the date stored with the seed below.
+  if (fromStart || (date && await store.get('wallet'))) {
+    const record = { ...(await wallet()), birthday: placed };
     delete record.birthdayNote;
     await store.put('wallet', record);
   }
+  if (date && !isOwn(await store.get('wallet'))) await db.putSeed({ ...(await db.getSeed()), date });
   await store.delete('snapshot');
   await reflect();
   publish();
@@ -750,8 +765,8 @@ const ui = {
   },
   checkAddress: async ({ address }) => midnight.checkAddress(net().networkId, address),
   previewSend: async ({ outputs }) => {
-    const { wallet: w } = await synced();
-    return withBusy('send', 'balancing', async () => {
+    return withBusy('send', 'balancing', async stage => {
+      const { wallet: w } = await synced(stage);
       // A network without DUST has nothing to pay a fee with, and charges none.
       const built = await midnight.buildTransfer(w, outputs, { payFees: net().dust });
       const id = keepPreview({ kind: 'send', network: store.network, wallet: w, recipe: built.recipe, outputs: built.outputs, fee: built.fee });
@@ -769,8 +784,8 @@ const ui = {
   cancel: async ({ id }) => { await dropPreview(String(id)); return {}; },
   dustPreview: async ({ action }) => {
     if (!net().dust) throw new Error('This network has no DUST');
-    const { wallet: w } = await synced();
-    return withBusy('dust', 'balancing', async () => {
+    return withBusy('dust', 'balancing', async stage => {
+      const { wallet: w } = await synced(stage);
       const built = await midnight.buildDustAction(w, action);
       const id = keepPreview({ kind: 'dust', network: store.network, wallet: w, recipe: built.recipe, action, fee: built.fee });
       const { recipe, ...shown } = built;

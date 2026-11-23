@@ -10,12 +10,12 @@ import { SyncSummary } from './sync.jsx';
 import { NIGHT_TYPE, busyText, dust, hasDust, isNight, night, ratio, shortType } from './format.js';
 import { describeToken, tokenAmount, tokenLetters, tokenUnit, useTokenLabels } from './tokens.js';
 
-/** Shown while the engine balances, proves or submits something. */
-function BusyStrip({ busy }) {
+/** Shown while the engine waits for its sync, balances, proves or submits something. */
+function BusyStrip({ busy, sync }) {
   return (
     <div className="flex items-center gap-2.5 rounded-xl bg-kumo-warning-tint px-3 py-2.5" role="status">
       <Loader size="sm" />
-      <span className="text-[13px] font-medium text-kumo-default">{busyText(busy)}</span>
+      <span className="text-[13px] font-medium text-kumo-default">{busyText(busy, sync)}</span>
     </div>
   );
 }
@@ -99,7 +99,7 @@ export function Home({ state, overview, onOpen }) {
         <QuickAction icon={ArrowUpRightIcon} label="Send" onClick={() => onOpen('send')} />
         {withDust && <QuickAction icon={DropIcon} label="DUST" onClick={() => onOpen('dust')} />}
       </div>
-      {state.busy && <BusyStrip busy={state.busy} />}
+      {state.busy && <BusyStrip busy={state.busy} sync={state.sync} />}
       {overview && (
         <>
           {withDust && <Section title="DUST"><DustCard dust={overview.dust} onOpen={() => onOpen('dust')} /></Section>}

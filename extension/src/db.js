@@ -17,9 +17,10 @@
 // Settings shared by all networks live in mdwa-settings, and so does the
 // wallet every network without one of its own uses (see engine-worker.js):
 //   seed:     { sealed, createdAt, restored, date }: the sealed seed, when it
-//             was created or restored, and for a restore the birthday date
-//             the user gave (null for none), so its birthday can be placed
-//             on a network it first opens on later
+//             was created or restored, and the birthday date the user gave
+//             to a restore or to the latest rescan from a date (null for
+//             none), so its birthday can be placed on a network it first
+//             opens on later
 const SETTINGS_DB = 'mdwa-settings';
 const opened = new Map();
 

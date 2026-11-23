@@ -1,19 +1,20 @@
-// Settings: the connection to the network, proving, locking, rescanning and
-// removing the wallet. Every network keeps its own connection values. A
-// network the user added shows its definition instead of the connection
-// fields: its endpoints are edited, and the network removed, in its form
-// (networks.jsx). Before a wallet exists, the welcome screen shows the
-// connection and proving only, so a wallet is created through them.
+// Settings: the connection to the network, proving, locking, rescanning (from
+// the birthday, a date or the start of the chain) and removing the wallet.
+// Every network keeps its own connection values. A network the user added
+// shows its definition instead of the connection fields: its endpoints are
+// edited, and the network removed, in its form (networks.jsx). Before a
+// wallet exists, the welcome screen shows the connection and proving only, so
+// a wallet is created through them.
 import { useEffect, useState } from 'react';
 import { CheckCircleIcon, LockKeyIcon, TrashIcon } from '@phosphor-icons/react';
 import { Dialog } from '@cloudflare/kumo/components/dialog';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { useKumoToastManager } from '@cloudflare/kumo/components/toast';
-import { AddRow, DetailRow, ListCard, PasswordField, PrimaryButton, SecondaryButton, Section, TextField, Viewport } from './components.jsx';
+import { AddRow, DateField, DetailRow, ListCard, PasswordField, PrimaryButton, SecondaryButton, Section, TextField, Viewport } from './components.jsx';
 import { DEFAULT_PROOF_SERVER, NETWORKS } from '../../../wallet/networks.mjs';
 import { entryFor, withEntry } from './endpoints.js';
 import { ui } from './api.js';
-import { dateTime, networkName, shortHash, withCommas } from './format.js';
+import { dateTime, localDay, networkName, shortHash, withCommas } from './format.js';
 
 const PROVERS = [
   { kind: 'wasm', title: 'In this browser (WASM)', hint: 'No extra software, slower' },
@@ -112,13 +113,19 @@ export function Settings({ state, onForm }) {
     save(next, 'Defaults restored');
   };
   const lock = () => ui('lock').catch(e => toasts.add({ title: 'Could not lock', description: e.message, variant: 'error' }));
-  const rescan = async fromStart => {
+  const [rescanDate, setRescanDate] = useState('');
+  const [rescanning, setRescanning] = useState(false);
+  const rescan = async params => {
+    setRescanning(true);
     try {
-      await ui('rescan', { fromStart });
+      await ui('rescan', params);
       toasts.add({ title: 'Rescanning', description: 'Balances fill in again as the chain is read.', variant: 'success' });
-    } catch (e) { toasts.add({ title: 'Could not rescan', description: e.message, variant: 'error' }); }
+    } catch (e) { toasts.add({ title: 'Could not rescan', description: e.message, variant: 'error' }); } finally { setRescanning(false); }
   };
   const birthday = state.birthday;
+  // As in the restore form: the picker is bounded to today, and a typed date past it is refused too.
+  const today = localDay(Date.now());
+  const futureDate = rescanDate !== '' && rescanDate > today;
   const removeTitle = state.ownWallet ? `Remove the ${name} wallet` : 'Remove the wallet';
 
   return (
@@ -170,7 +177,19 @@ export function Settings({ state, onForm }) {
                   : `Syncs ${name} again from the start of the chain. `}
                 Use it if balances or activity look wrong. It can take a while.
               </p>
-              <SecondaryButton className="w-full" onClick={() => rescan(false)}>Rescan</SecondaryButton>
+              <SecondaryButton className="w-full" disabled={rescanning} onClick={() => rescan({})}>Rescan</SecondaryButton>
+            </div>
+            <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
+              <span className="text-sm font-semibold text-kumo-default">Rescan from a date</span>
+              <p className="text-xs leading-normal text-kumo-subtle">
+                {state.ownWallet
+                  ? `Moves the wallet birthday on ${name} to this date and syncs ${name} again from it.`
+                  : `Moves the wallet birthday on ${name} to this date and syncs ${name} again from it; networks the wallet opens on later start from it too.`}
+              </p>
+              <DateField label="Wallet birthday" value={rescanDate} max={today} onChange={e => setRescanDate(e.target.value)}
+                error={futureDate ? 'The birthday cannot be in the future' : null}
+                description={`Shielded tokens received before this date will not be found on ${name}.`} />
+              <SecondaryButton className="w-full" disabled={rescanning || !rescanDate || futureDate} onClick={() => rescan({ date: rescanDate })}>Rescan from a date</SecondaryButton>
             </div>
             {birthday && (
               <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
@@ -179,7 +198,7 @@ export function Settings({ state, onForm }) {
                   Removes the wallet birthday and scans every shielded transaction since the chain began, to find tokens received
                   before the birthday. It downloads the chain's whole shielded history, which takes much longer than a rescan from the birthday.
                 </p>
-                <SecondaryButton className="w-full" onClick={() => rescan(true)}>Rescan from the start of the chain</SecondaryButton>
+                <SecondaryButton className="w-full" disabled={rescanning} onClick={() => rescan({ fromStart: true })}>Rescan from the start of the chain</SecondaryButton>
               </div>
             )}
           </Section>

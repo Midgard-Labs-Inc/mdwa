@@ -185,7 +185,7 @@ function Details({ described }) {
 /** What the wallet is doing about this request while it is prepared: its
  *  own work on it, or waiting for another operation to finish first. */
 function preparingText(state) {
-  if (state.busy?.ticket === id) return busyText(state.busy);
+  if (state.busy?.ticket === id) return busyText(state.busy, state.sync);
   if (state.busy || state.waiting?.includes(id)) return 'Waiting for the wallet to finish another transaction…';
   return 'Preparing the transaction…';
 }

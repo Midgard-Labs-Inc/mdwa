@@ -106,7 +106,7 @@ export function DustPage({ state, overview, onBack }) {
         <PageHeader title="Review" onBack={discard} />
         <Viewport>
           <Review action={staged.action} preview={staged.preview} />
-          {busy === 'apply' && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy)} />}
+          {busy === 'apply' && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy, state.sync)} />}
           {error && <Banner size="sm" variant="error" description={error} />}
         </Viewport>
         <ActionFooter
@@ -158,7 +158,7 @@ export function DustPage({ state, overview, onBack }) {
             )}
           </>
         )}
-        {state.busy && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy)} />}
+        {state.busy && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={busyText(state.busy, state.sync)} />}
         {error && <Banner size="sm" variant="error" description={error} />}
       </Viewport>
       {(canRegister || canStop) && (

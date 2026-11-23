@@ -125,13 +125,19 @@ export const localDay = value => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
 
-/** What the engine is doing right now, in the words shown on Home, Send and approvals. */
+/** What the engine is doing right now, in the words shown on Home, Send,
+ *  DUST and approvals; while it waits for its own sync, with `sync`'s
+ *  percentage. */
 const BUSY_TEXT = {
+  syncing: sync => `Waiting for the wallet to finish reading the chain (${percentText(sync?.percent)})…`,
   balancing: 'Balancing the transaction…',
   proving: 'Proving… this can take a minute',
   submitting: 'Submitting to the network…',
 };
-export const busyText = busy => BUSY_TEXT[busy?.stage] ?? 'Working…';
+export const busyText = (busy, sync) => {
+  const text = BUSY_TEXT[busy?.stage] ?? 'Working…';
+  return typeof text === 'function' ? text(sync) : text;
+};
 
 /** The selected network as the engine state lists it: `{ id, name, networkId, user, dust, hasWallet }`. */
 export const currentNetwork = state => state.networks.find(n => n.id === state.network);
