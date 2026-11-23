@@ -8,6 +8,7 @@
     "helium": "node scripts/build-extension.mjs && node scripts/helium.mjs",
     "smoke": "node scripts/smoke.mjs",
     "check:custom": "node scripts/custom-check.mjs",
+    "check:birthday": "node scripts/birthday-check.mjs",
     "check:browser": "node scripts/build-extension.mjs && node scripts/browser-check.mjs",
     "dapp": "node dapp/serve.mjs",
     "dapp:contract": "node dapp/compile.mjs",

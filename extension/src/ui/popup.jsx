@@ -46,6 +46,13 @@ function useEngineState() {
 }
 
 // ------------------------------------------------------------------ network --
+/** What the network menu says of a network's wallet: a wallet of its own is
+ *  named so only beside the shared one. */
+const walletText = (state, n) => {
+  if (n.ownWallet && state.sharedWallet) return 'Its own wallet';
+  return n.hasWallet ? 'Wallet set up' : 'No wallet yet';
+};
+
 /** The network switcher; `onForm('add')` opens the form for a new network. */
 function NetworkMenu({ state, onForm }) {
   const toasts = useKumoToastManager();
@@ -66,7 +73,7 @@ function NetworkMenu({ state, onForm }) {
                 <span className={`mt-[5px] size-2.5 shrink-0 rounded-full ${networkLook(n.id).dot}`} />
                 <span className="flex flex-col">
                   <span className="font-medium">{n.name}</span>
-                  <span className={`text-xs ${n.id === state.network ? 'text-kumo-info' : 'text-kumo-subtle'}`}>{n.hasWallet ? 'Wallet set up' : 'No wallet yet'}</span>
+                  <span className={`text-xs ${n.id === state.network ? 'text-kumo-info' : 'text-kumo-subtle'}`}>{walletText(state, n)}</span>
                 </span>
               </span>
             </DropdownMenu.Item>
@@ -117,7 +124,7 @@ function EngineError({ message }) {
 const FEATURES = [
   { icon: CubeIcon, title: 'Uses endpoints you choose', body: name => `Reads ${name} through an indexer, and sends to a node or a submit URL, all changeable in Settings.` },
   { icon: LockKeyIcon, title: 'Keys stay on this device', body: () => 'Your key is encrypted with your password and never leaves this browser.' },
-  { icon: GlobeHemisphereWestIcon, title: 'One wallet per network', body: () => 'Every network, built in or added, keeps its own wallet.' },
+  { icon: GlobeHemisphereWestIcon, title: 'One wallet, every network', body: () => 'Your recovery phrase opens on every network, built in or added, each with its own addresses.' },
 ];
 
 function Welcome({ state, name, onPick, onForm }) {
@@ -143,7 +150,10 @@ function Welcome({ state, name, onPick, onForm }) {
             </li>
           ))}
         </ul>
-        {currentNetwork(state)?.user && <LinkButton icon={PencilSimpleIcon} className="self-center" onClick={() => onForm('edit')}>Edit or remove {name}</LinkButton>}
+        <div className="flex flex-col">
+          <LinkButton icon={GearSixIcon} className="self-center" onClick={() => onPick('settings')}>Connection settings</LinkButton>
+          {currentNetwork(state)?.user && <LinkButton icon={PencilSimpleIcon} className="self-center" onClick={() => onForm('edit')}>Edit or remove {name}</LinkButton>}
+        </div>
       </div>
       <div className="flex shrink-0 flex-col gap-2 px-4 pt-3 pb-4">
         <PrimaryButton className="w-full" icon={PlusIcon} onClick={() => onPick('new')}>Create a new wallet</PrimaryButton>
@@ -182,6 +192,16 @@ function Onboarding({ state, name, onForm }) {
   };
 
   if (!mode) return <Welcome state={state} name={name} onPick={pick} onForm={onForm} />;
+  // The endpoints a wallet will be created with: the same Settings, without
+  // what needs a wallet.
+  if (mode === 'settings') {
+    return (
+      <Screen>
+        <PageHeader title="Settings" onBack={() => setMode(null)} />
+        <Settings state={state} onForm={onForm} />
+      </Screen>
+    );
+  }
   const mismatch = confirm.length > 0 && confirm !== password;
   const wordCount = words.trim() ? words.trim().split(/\s+/).length : 0;
   // The picker is bounded to today; a typed date past it is refused too.
@@ -192,7 +212,7 @@ function Onboarding({ state, name, onForm }) {
     <Section title="Protect this wallet" gap="gap-3">
       <PasswordField label="Password" value={password} onChange={e => setPassword(e.target.value)} autoComplete="new-password"
         placeholder="At least 8 characters"
-        description={`Encrypts this ${name} wallet's key on this device. You enter it once per browser session.`} />
+        description="Encrypts your wallet's key on this device, for every network. You enter it once per browser session." />
       <PasswordField label="Confirm password" value={confirm} onChange={e => setConfirm(e.target.value)} autoComplete="new-password"
         placeholder="Repeat password" error={mismatch ? 'The passwords do not match' : null} />
     </Section>
@@ -203,7 +223,7 @@ function Onboarding({ state, name, onForm }) {
       <Viewport>
         {mode === 'new' ? (
           <>
-            <Heading title={`Your ${name} recovery phrase`} subtitle="Generated on this device from Web Crypto randomness. It is never stored." />
+            <Heading title="Your recovery phrase" subtitle="Generated on this device from Web Crypto randomness. It is never stored." />
             <Notice>Write these 24 words down in order and keep them offline. Anyone with them controls your funds.</Notice>
             <div className="rounded-xl border border-kumo-hairline bg-kumo-base py-3.5 pr-3.5 pl-2.5">
               {generated ? (
@@ -214,13 +234,14 @@ function Onboarding({ state, name, onForm }) {
             </div>
             <Checkbox label={<span className="text-[13px]">I wrote down all 24 words</span>} checked={saved} onCheckedChange={setSaved} />
             <p className="text-xs leading-normal text-kumo-subtle">
-              The new wallet starts at the current block of {name}: nothing can have been sent to it before, so it skips the chain's history.
+              The new wallet starts at the current block of {name}, and on another network at the block of this moment: nothing can have
+              been sent to it before, so it skips the chain's history.
             </p>
             {protect}
           </>
         ) : (
           <>
-            <Heading title={`Restore a ${name} wallet`} subtitle="Enter your recovery phrase. The wallet reads the chain to find your funds." />
+            <Heading title="Restore a wallet" subtitle="Enter your recovery phrase. The wallet reads each network's chain to find your funds." />
             <Field label="Recovery phrase" htmlFor="phrase" description={plural(wordCount, 'word')}>
               <InputArea id="phrase" placeholder="Words separated by spaces" rows={4} value={words} onValueChange={setWords} spellCheck={false}
                 className="h-24 resize-none rounded-[10px] bg-kumo-control px-3.5 py-[11px] font-mono text-[13px] leading-normal" />
@@ -258,8 +279,12 @@ function Unlock({ state, name, onForm }) {
         <div className="flex min-h-0 flex-1 flex-col justify-center gap-6 px-6">
           <div className="flex flex-col items-center gap-2.5">
             <Mark size={56} />
-            <h2 className="text-xl font-bold text-kumo-default">Unlock {name} wallet</h2>
-            <p className="text-center text-[13px] leading-normal text-kumo-subtle">Enter your password. The wallet stays unlocked until you close the browser or lock it.</p>
+            <h2 className="text-xl font-bold text-kumo-default">{state.ownWallet ? `Unlock ${name} wallet` : 'Unlock wallet'}</h2>
+            <p className="text-center text-[13px] leading-normal text-kumo-subtle">
+              {state.ownWallet && state.sharedWallet
+                ? `${name} keeps a wallet of its own: enter its own password. It stays unlocked until you close the browser or lock it.`
+                : 'Enter your password. The wallet stays unlocked until you close the browser or lock it.'}
+            </p>
           </div>
           <PasswordField value={password} onChange={e => setPassword(e.target.value)} error={error} autoFocus placeholder="Enter your password" />
         </div>

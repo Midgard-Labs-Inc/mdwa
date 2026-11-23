@@ -75,8 +75,10 @@ sequenceDiagram
   proof), the content script pings the background every 20 seconds so Chrome does
   not stop the service worker and drop the request.
 - **A locked wallet.** The three address methods are answered while the wallet is
-  locked, since the addresses are stored with the wallet. Anything else opens an
-  unlock window, one at a time however many requests are waiting.
+  locked, since the addresses are stored with the wallet, except on a network
+  the wallet has not opened on yet, whose addresses are made at the first
+  unlock there. Anything else opens an unlock window, one at a time however
+  many requests are waiting.
 
 ## Connecting
 

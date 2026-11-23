@@ -81,8 +81,8 @@ export function NetworkForm({ state, editing, onDone }) {
           {error && <Banner variant="error" icon={<WarningCircleIcon />} description={error} />}
           {editing && (
             <Section title="Remove">
-              {state.hasWallet
-                ? <p className="text-xs leading-normal text-kumo-subtle">Remove this network's wallet first (Settings, Danger zone), then the network.</p>
+              {state.ownWallet
+                ? <p className="text-xs leading-normal text-kumo-subtle">Remove this network's own wallet first (Settings, Danger zone), then the network.</p>
                 : <SecondaryButton className="w-full" tone="danger" icon={TrashIcon} loading={busy === 'remove'} disabled={!!busy} onClick={remove}>Remove network</SecondaryButton>}
             </Section>
           )}

@@ -1,8 +1,9 @@
 // Settings: the connection to the network, proving, locking, rescanning and
-// removing this network's wallet. Every network keeps its own values. A
+// removing the wallet. Every network keeps its own connection values. A
 // network the user added shows its definition instead of the connection
 // fields: its endpoints are edited, and the network removed, in its form
-// (networks.jsx).
+// (networks.jsx). Before a wallet exists, the welcome screen shows the
+// connection and proving only, so a wallet is created through them.
 import { useEffect, useState } from 'react';
 import { CheckCircleIcon, LockKeyIcon, TrashIcon } from '@phosphor-icons/react';
 import { Dialog } from '@cloudflare/kumo/components/dialog';
@@ -37,7 +38,7 @@ function ProverChoice({ value, onChange }) {
   );
 }
 
-function RemoveDialog({ name }) {
+function RemoveDialog({ title }) {
   const [open, setOpen] = useState(false);
   const [password, setPassword] = useState('');
   const [error, setError] = useState(null);
@@ -52,7 +53,7 @@ function RemoveDialog({ name }) {
       <Dialog.Trigger render={p => <SecondaryButton {...p} className="w-full" tone="danger" icon={TrashIcon}>Remove wallet…</SecondaryButton>} />
       <Dialog size="sm" className="p-6">
         <form onSubmit={remove} className="flex flex-col gap-4">
-          <Dialog.Title className="text-base font-semibold text-kumo-default">Remove the {name} wallet?</Dialog.Title>
+          <Dialog.Title className="text-base font-semibold text-kumo-default">{title}?</Dialog.Title>
           <Dialog.Description className="text-[13px] leading-normal text-kumo-subtle">Funds stay on chain. Without the recovery phrase you cannot restore access.</Dialog.Description>
           <PasswordField value={password} onChange={e => setPassword(e.target.value)} error={error} autoFocus />
           <div className="flex gap-2">
@@ -100,7 +101,7 @@ export function Settings({ state, onForm }) {
     try {
       await ui('saveSettings', { network: state.network, endpoints: withEntry(settings.endpoints, state.network, next) });
       setSettings(s => ({ ...s, endpoints: withEntry(s.endpoints, state.network, next) }));
-      toasts.add({ title, description: 'Reconnecting with the new settings.', variant: 'success' });
+      toasts.add({ title, description: state.hasWallet ? 'Reconnecting with the new settings.' : 'A wallet you create or restore here uses them.', variant: 'success' });
     } catch (e) { toasts.add({ title: 'Could not save', description: e.message, variant: 'error' }); }
   };
   // The project id is the user's credential for the hosted endpoints, not an
@@ -118,10 +119,11 @@ export function Settings({ state, onForm }) {
     } catch (e) { toasts.add({ title: 'Could not rescan', description: e.message, variant: 'error' }); }
   };
   const birthday = state.birthday;
+  const removeTitle = state.ownWallet ? `Remove the ${name} wallet` : 'Remove the wallet';
 
   return (
     <Viewport gap="gap-5">
-      <h2 className="px-1 text-lg font-bold text-kumo-default">Settings</h2>
+      {state.hasWallet && <h2 className="px-1 text-lg font-bold text-kumo-default">Settings</h2>}
       {settings?.definition.user ? <UserNetwork definition={settings.definition} onEdit={() => onForm('edit')} /> : (
         <Section title="Connection" gap="gap-3">
           {!values ? <Loader /> : (
@@ -152,43 +154,49 @@ export function Settings({ state, onForm }) {
           </>
         )}
       </Section>
-      <Section title="Session">
-        <ListCard>
-          <AddRow icon={LockKeyIcon} label="Lock wallet" trailing="Asks for your password again" onClick={lock} />
-        </ListCard>
-      </Section>
-      <Section title="History">
-        <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
-          <span className="text-sm font-semibold text-kumo-default">Rescan</span>
-          <p className="text-xs leading-normal text-kumo-subtle">
-            {birthday
-              ? `Syncs ${name} again, shielded tokens from the wallet birthday (${dateTime(birthday.time)}, block ${withCommas(birthday.height)}). `
-              : `Syncs ${name} again from the start of the chain. `}
-            Use it if balances or activity look wrong. It can take a while.
-          </p>
-          <SecondaryButton className="w-full" onClick={() => rescan(false)}>Rescan</SecondaryButton>
-        </div>
-        {birthday && (
-          <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
-            <span className="text-sm font-semibold text-kumo-default">Rescan from the start of the chain</span>
-            <p className="text-xs leading-normal text-kumo-subtle">
-              Removes the wallet birthday and scans every shielded transaction since the chain began, to find tokens received
-              before the birthday. It downloads the chain's whole shielded history, which takes much longer than a rescan from the birthday.
-            </p>
-            <SecondaryButton className="w-full" onClick={() => rescan(true)}>Rescan from the start of the chain</SecondaryButton>
-          </div>
-        )}
-      </Section>
-      <Section title="Danger zone">
-        <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
-          <span className="text-sm font-semibold text-kumo-default">Remove the {name} wallet</span>
-          <p className="text-xs leading-normal text-kumo-subtle">
-            Deletes this network's encrypted key, history and site approvals from this browser. Other networks are not touched.
-            You need the recovery phrase to restore it.
-          </p>
-          <RemoveDialog name={name} />
-        </div>
-      </Section>
+      {state.hasWallet && (
+        <>
+          <Section title="Session">
+            <ListCard>
+              <AddRow icon={LockKeyIcon} label="Lock wallet" trailing="Every network asks for its password again" onClick={lock} />
+            </ListCard>
+          </Section>
+          <Section title="History">
+            <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
+              <span className="text-sm font-semibold text-kumo-default">Rescan</span>
+              <p className="text-xs leading-normal text-kumo-subtle">
+                {birthday
+                  ? `Syncs ${name} again, shielded tokens from the wallet birthday (${dateTime(birthday.time)}, block ${withCommas(birthday.height)}). `
+                  : `Syncs ${name} again from the start of the chain. `}
+                Use it if balances or activity look wrong. It can take a while.
+              </p>
+              <SecondaryButton className="w-full" onClick={() => rescan(false)}>Rescan</SecondaryButton>
+            </div>
+            {birthday && (
+              <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
+                <span className="text-sm font-semibold text-kumo-default">Rescan from the start of the chain</span>
+                <p className="text-xs leading-normal text-kumo-subtle">
+                  Removes the wallet birthday and scans every shielded transaction since the chain began, to find tokens received
+                  before the birthday. It downloads the chain's whole shielded history, which takes much longer than a rescan from the birthday.
+                </p>
+                <SecondaryButton className="w-full" onClick={() => rescan(true)}>Rescan from the start of the chain</SecondaryButton>
+              </div>
+            )}
+          </Section>
+          <Section title="Danger zone">
+            <div className="flex flex-col gap-2.5 rounded-xl border border-kumo-hairline bg-kumo-base p-3.5">
+              <span className="text-sm font-semibold text-kumo-default">{removeTitle}</span>
+              <p className="text-xs leading-normal text-kumo-subtle">
+                {state.ownWallet
+                  ? `Deletes the wallet ${name} keeps of its own: its encrypted key, history and site approvals, from this browser. Other networks are not touched. `
+                  : 'Deletes the encrypted key, and every network\'s history, notes, token labels and site approvals, from this browser. A network with a wallet of its own keeps it. '}
+                You need the recovery phrase to restore it.
+              </p>
+              <RemoveDialog title={state.ownWallet ? removeTitle : 'Remove the wallet from every network'} />
+            </div>
+          </Section>
+        </>
+      )}
     </Viewport>
   );
 }

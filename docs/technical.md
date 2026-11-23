@@ -98,16 +98,21 @@ Preview is the default network. The table is in
 [wallet/networks.mjs](../wallet/networks.mjs). Networks you define sit beside
 these four; see [Your own networks](#your-own-networks).
 
-- **Separate wallets.** Each network has its own recovery phrase, password,
-  IndexedDB database (`mdwa-<network>`), snapshot, token labels and site
-  approvals. Using one recovery phrase on two networks means restoring it on
-  both. Only the selected network syncs; switching stops it, saves its
-  snapshot and starts the other.
+- **One wallet.** A recovery phrase created or restored once is the wallet on
+  every network, built in or added: switching network asks for no phrase and,
+  while the wallet is unlocked, no password. Each network has the addresses its
+  network id gives the seed, and its own IndexedDB database
+  (`mdwa-<network>`), snapshot, token labels and site approvals. Only the
+  selected network syncs; switching stops it, saves its snapshot and starts the
+  other. Wallets made per network by earlier versions are kept; see
+  [Keys and unlocking](#keys-and-unlocking).
 - **Editable endpoints.** Settings has the node RPC, the indexer's HTTP and
-  WebSocket URLs, and, per network, the proving mode. The settings are stored
-  once for all networks in `mdwa-settings`. Changing a network's indexer URL
-  discards its snapshot, because a snapshot belongs to the indexer that
-  produced it.
+  WebSocket URLs, and, per network, the proving mode. Before a wallet exists,
+  the welcome screen's **Connection settings** opens the same fields, so a
+  wallet is created through your own node and indexer (its birthday is read
+  from the indexer then). The settings are stored once for all networks in
+  `mdwa-settings`. Changing a network's indexer URL discards its snapshot,
+  because a snapshot belongs to the indexer that produced it.
 - **Blockfrost.** The project id is entered in Settings. It is appended as
   `?project_id=` to the node and both indexer URLs when the connection is
   made, never stored inside a URL, and never given to a dApp: what dApps see
@@ -139,11 +144,14 @@ widened.
 - **Storage.** A definition is stored in `mdwa-settings` under a key of its
   own (`user-` and 12 hex digits, also its database's name), not its network
   id, since two networks may share one (two local chains are both
-  `undeployed`). Each network is its own wallet, as the built-in ones are.
+  `undeployed`). The wallet opens on it as on the built-in ones.
 - **Editing and removing.** **Edit network** (Settings, or the welcome screen of
   a network without a wallet) changes everything but the network id, which the
-  wallet's addresses are made with. A network can be removed once its wallet is
-  (Settings, Danger zone). Added networks show in a neutral color.
+  wallet's addresses are made with. Removing a network deletes its own data
+  (addresses, snapshot, notes, token labels, site approvals); the wallet stays
+  for the other networks. A network that has a wallet of its own from an
+  earlier version is removed after that wallet (Settings, Danger zone). Added
+  networks show in a neutral color.
 - **The chain's identity.** When a network is added, the wallet reads the hash
   of the chain's first block from its indexer
   (`block(offset: { height: 0 }) { hash }`) and stores it. Every start, and
@@ -319,6 +327,13 @@ flowchart TD
   means the start, a date after the tip means the tip, and a date in the future
   is refused. Wallets made before birthdays existed have none and keep the full
   history their snapshots already hold.
+- **On the other networks.** The wallet places its birthday on a network the
+  first time it opens there: a new phrase at the last block at or before the
+  moment it was created (funds may have reached that network's address since),
+  a restored one at its date on every network, or the start of the chain
+  without one. The same indexer lookup as a restore's date is used, and a time
+  the indexer cannot place is not guessed: Chain sync shows why, and the
+  wallet tries again.
 - **Fallbacks.** A chain with no zswap output by the birthday has nothing to
   skip, so the wallet starts at the beginning. If the indexer cannot place the
   birthday (no `zswapMerkleTreeCollapsedUpdate`, an inconsistent answer, an
@@ -384,6 +399,11 @@ the start of the chain as before.
   with SHA-256 (600,000 iterations) into AES-256-GCM, with a random salt and
   IV. The password is at least 8 characters. The recovery phrase itself is
   never stored; the wallet cannot show it again.
+- **Where it is kept.** The sealed seed is stored once, in `mdwa-settings`
+  (key `seed`), with when it was created and, for a restore, the birthday date
+  given, so its birthday can be placed on a network it opens on later. Each
+  network's database holds that network's record: its three addresses, its
+  birthday and a mark that it uses this seed; no copy of the seed.
 - **Records.** What the wallet knows about itself says which coins it owns:
   the SDK snapshot, the history, and its notes on its own transactions (kind,
   site, fee). These are encrypted with an AES-256-GCM key derived from the seed
@@ -391,10 +411,15 @@ the start of the chain as before.
   another network. Stored in the clear: the three addresses, the token labels
   (a name you typed or public contract data), the site approvals, and the
   settings including the Blockfrost project id.
-- **Unlocking.** You enter the password once per browser session and network.
-  The engine keeps the seed in memory until you lock the wallet, close the
-  browser, or the engine stops. While it is unlocked, a send or an approval
-  needs a click, not the password.
+- **Unlocking.** You enter the password once per browser session: it unlocks
+  every network, and locking locks them all. The engine keeps the seed in
+  memory until you lock the wallet, close the browser, or the engine stops.
+  While it is unlocked, a send or an approval needs a click, not the password.
+- **Wallets from before one wallet.** Earlier versions kept a wallet per
+  network, each with its own phrase and password. Such a wallet is kept as it
+  is (never merged or re-encrypted) and unlocks on its own with its own
+  password; the unlock screen says so when it could be mistaken for the
+  shared one. Once it is removed, its network uses the shared wallet.
 
 This differs from the Cardano sibling wallet, local-wallet, which asks for the
 password on every signature. Here it cannot. A Midnight wallet cannot follow the chain with public
@@ -404,9 +429,11 @@ long as the wallet syncs. So the password protects the seed at rest, and an unlo
 protected by the approval step: every spend from the popup is a review and a
 click, and every dApp request is a window the page cannot click for you.
 
-Removing a wallet (Settings, Danger zone) asks for the password, deletes the
-network's database (sealed seed, snapshot, notes, token labels) and forgets
-the network's site approvals. Funds stay on chain.
+Removing the wallet (Settings, Danger zone) asks for the password, deletes the
+sealed seed and the data of every network that used it (snapshots, notes,
+token labels) and forgets those networks' site approvals. A network with a
+wallet of its own keeps it; removing that one deletes that network's database
+and site approvals only. Funds stay on chain.
 
 ## Proving
 
@@ -530,11 +557,12 @@ chose it, and the page says so.
 The popup is 380 by 600 pixels, with light and dark themes and a network color
 for each network. It has:
 
-- a network switcher showing which networks have a wallet, and **Add a
-  network…** for your own;
-- create and restore per network: 24 words for a new wallet, which starts at
-  the current block, 12 to 24 for a restore with an optional wallet birthday
-  date, and a password;
+- a network switcher showing which networks have a wallet (and which keep one
+  of their own), and **Add a network…** for your own;
+- create and restore, once for every network: 24 words for a new wallet, which
+  starts at the current block, 12 to 24 for a restore with an optional wallet
+  birthday date, and a password; before that, **Connection settings** for the
+  selected network's endpoints and proving;
 - **Home**: the NIGHT balance, DUST available, Receive, Send and DUST actions,
   a strip while the engine balances, proves or submits, a DUST card (balance
   against cap, registered and unregistered NIGHT), and the unshielded and
@@ -616,8 +644,9 @@ its arguments.
 | Command | Does |
 | --- | --- |
 | `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
+| `npm run check:birthday` | where a wallet birthday lands, under Node against an in-process stub indexer: a new wallet at the tip, a creation time or a restore's date at the last block at or before it, the start and the tip at either end |
 | `npm run smoke` | the engine's Midnight logic under Node against a real network: a fresh phrase born at the tip, sync, addresses, balances, snapshot and resume of all three parts; with a funded seed (scanned from the start), sends and DUST registration |
-| `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the WASM prover proves in a worker |
+| `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the same wallet opens on Preprod without a password, removing it works, the WASM prover proves in a worker |
 | `npm run check:connector` | the built extension and the test dApp in a browser, through every connector method, answering the approval windows (`--prover server` proves with the proof server, `--profile-root` picks where its throwaway profile goes) |
 
 ### The local test dApp
@@ -699,10 +728,10 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
 | `extension/src/connector.js` | the connector's engine side: balancing, previews, signing, proving transport |
 | `extension/src/tokens.js` | token labels and the watch-token check |
 | `extension/src/vault.js` | seed sealing and the record key |
-| `extension/src/db.js` | IndexedDB per network, and settings |
+| `extension/src/db.js` | IndexedDB per network, the sealed seed, and settings |
 | `extension/src/inject.js`, `content.js` | the page's connector object and its relay |
 | `extension/src/ui/` | popup and approval windows (React) |
 | `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, the page policy check, Blockfrost URL handling, units |
-| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser, connector and custom-network checks |
+| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser, connector, custom-network and birthday checks |
 | `dapp/` | the local test dApp: `index.html`, `app.js`, `serve.mjs`, `compile.mjs`, `contract/counter.compact` |
 | `docs/` | this documentation and its screenshots |

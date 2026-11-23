@@ -1,8 +1,8 @@
 # mdwa
 
 A Midnight wallet as a Chrome (MV3) extension, built on Midnight's wallet SDK.
-It talks to a Midnight node and indexer and works on Preview, Preprod, Mainnet
-and a local network, with a separate wallet on each.
+It talks to a Midnight node and indexer and works on Preview, Preprod, Mainnet,
+a local network and networks you add, with one recovery phrase for all of them.
 
 <table>
   <tr>
@@ -45,7 +45,9 @@ npm run helium
 `npm run helium` opens [Helium](https://helium.computer) with the extension
 loaded. For Chrome, load `build/extension` unpacked from `chrome://extensions`.
 
-Preprod and Mainnet go through Blockfrost and need a project id in Settings.
+Preprod and Mainnet go through Blockfrost and need a project id in Settings,
+unless you point them at your own node and indexer. The welcome screen's
+Connection settings sets the endpoints before you create a wallet.
 
 `npm run dapp` serves a local test dApp for the connector.
 

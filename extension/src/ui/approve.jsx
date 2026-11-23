@@ -388,7 +388,7 @@ function App() {
         </div>
         {locked ? (
           <Input type="password" label="Password" value={password} onChange={e => setPassword(e.target.value)} autoFocus
-            autoComplete="current-password" description={`Unlocks the ${networkLabel} wallet so you can review this request.`}
+            autoComplete="current-password" description={`Unlocks ${state.ownWallet ? `the ${networkLabel} wallet` : 'the wallet'} so you can review this request.`}
             error={unlockError ?? undefined} variant={unlockError ? 'error' : 'default'} />
         ) : <Body request={request} networkLabel={networkLabel} state={state} labels={labels} />}
         {working && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={preparingText(state)} />}
