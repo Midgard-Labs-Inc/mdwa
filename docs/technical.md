@@ -104,7 +104,9 @@ these four; see [Your own networks](#your-own-networks).
   network id gives the seed, and its own IndexedDB database
   (`mdwa-<network>`), snapshot, token labels and site approvals. Only the
   selected network syncs; switching stops it, saves its snapshot and starts the
-  other. Wallets made per network by earlier versions are kept; see
+  other. A site's `connect` for another network switches the same way: silently
+  where the site is approved, otherwise after you approve (see
+  [Connecting](dapp-connector.md#connecting)). Wallets made per network by earlier versions are kept; see
   [Keys and unlocking](#keys-and-unlocking).
 - **Editable endpoints.** Settings has the node RPC, the indexer's HTTP and
   WebSocket URLs, and, per network, the proving mode. Before a wallet exists,
@@ -160,6 +162,13 @@ widened.
 - **An indexer that rewinds.** A network whose indexer shows blocks before they
   are permanent, and can drop them, is handled without any setting: see
   [An indexer that rewinds](#an-indexer-that-rewinds).
+- **Offered by a site.** A site may offer a definition with
+  [`addNetwork`](dapp-connector.md#addnetwork). The window shows it in this
+  form's fields, read-only, after the same checks; a name in use gets a number
+  appended. One with the network id and addresses of a network the wallet has
+  is answered as existing, without a window. A site then selects it with
+  `connect`, whose optional `endpoint` tells apart networks that share a
+  network id.
 
 ```mermaid
 flowchart LR
@@ -579,6 +588,10 @@ token is shown as `Token` with its shortened type, and its quantity is raw.
   token's shielded and unshielded coins are the same token). NIGHT and DUST
   cannot be renamed. Labels are local to the browser, stored per network in the
   clear, and survive a rescan.
+- **Offered by a site.** A connected site may suggest a label with
+  [`watchToken`](dapp-connector.md#watchtoken), with the same rules and, when it
+  names a contract and domain separator, the same check below; you approve it
+  in a window.
 - **Watch token.** The Token page, and "Add a token" on Home, take a contract
   address (64 hex characters) and a domain separator (64 hex characters, or the
   text a contract writes as `pad(32, "…")`). The engine recomputes the token type
@@ -693,6 +706,7 @@ its arguments.
 | --- | --- |
 | `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
 | `npm run check:birthday` | where a wallet birthday lands, under Node against an in-process stub indexer: a new wallet at the tip, a creation time or a restore's date at the last block at or before it, the start and the tip at either end, the stored date first on the shared wallet's later networks |
+| `npm run check:requests` | what a page may ask beyond the connector API, under Node without network: which networks a connect names by network id and endpoint, the label rules applied to a page's token label, and the shielded coins of the wallet a transaction spends and receives, on a transaction built with the ledger |
 | `npm run check:rewind` | an indexer's `CHAIN_REWOUND`, under Node against an in-process stub of its GraphQL WebSocket: the SDK's unshielded sync, wrapped as the wallet wraps it, stops quietly and tells the engine once; any other error still fails it for the SDK's retry |
 | `npm run smoke` | the engine's Midnight logic under Node against a real network: a fresh phrase born at the tip, sync, addresses, balances, snapshot and resume of all three parts; with a funded seed (scanned from the start), sends and DUST registration |
 | `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the same wallet opens on Preprod without a password, removing it works, the WASM prover proves in a worker |

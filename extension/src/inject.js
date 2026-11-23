@@ -152,18 +152,23 @@
       getConfiguration: () => call('getConfiguration'),
       getConnectionStatus: () => call('getConnectionStatus'),
       hintUsage: async methodNames => { await call('hintUsage', methodNames); },
+      // Beyond the API: a label for a token, which the user approves.
+      watchToken: request => call('watchToken', request),
     });
   }
 
+  // Beyond the API: connect's optional `{ endpoint }` and addNetwork (see
+  // docs/dapp-connector.md, "Beyond the standard API").
   const initialApi = Object.freeze({
     rdns: 'wallet.mdwa',
     name: 'mdwa',
     icon: ICON,
     apiVersion: API_VERSION,
-    connect: async networkId => {
-      const { connectionId } = await request('connect', { networkId });
+    connect: async (networkId, options) => {
+      const { connectionId } = await request('connect', { networkId, options });
       return connectedApi(connectionId);
     },
+    addNetwork: definition => request('addNetwork', { definition }),
   });
 
   // ------------------------------------------------------------ install ---

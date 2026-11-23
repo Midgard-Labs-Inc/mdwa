@@ -1,9 +1,11 @@
-// The approval window (440x680): what a dApp asks for, shown for the six
-// request kinds, with Reject and the primary action pinned at the bottom.
-// The wallet is unlocked once per session, so the request itself needs no
-// password; a locked wallet shows the unlock form first (and a seventh kind,
-// 'unlock', is only that form: a site asked for something that needs the
-// wallet unlocked).
+// The approval window (440x680): what a dApp asks for, shown for each request
+// kind, with Reject and the primary action pinned at the bottom. The wallet
+// is unlocked once per session, so the request itself needs no password; a
+// locked wallet shows the unlock form first, where the request needs the
+// selected wallet (the 'unlock' kind is only that form: a site asked for
+// something that needs the wallet unlocked). A connect may switch network
+// (params.switchFrom), and offer a choice of networks (params.choices); a
+// site may offer a network (addNetwork) or a token name (watchToken).
 //
 // Transactions, transfers and swap offers open before the wallet has built
 // them (params.preparing): the background balances once the wallet is
@@ -24,16 +26,18 @@ import { useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowsLeftRightIcon, CheckIcon, ClockCounterClockwiseIcon, GlobeHemisphereWestIcon, LockKeyOpenIcon, PaperPlaneTiltIcon, PenNibIcon,
-  PlugsConnectedIcon, ShieldCheckIcon, SignatureIcon, WarningCircleIcon,
+  PlugsConnectedIcon, ShieldCheckIcon, SignatureIcon, TagIcon, WarningCircleIcon,
 } from '@phosphor-icons/react';
 import { Badge } from '@cloudflare/kumo/components/badge';
 import { Banner } from '@cloudflare/kumo/components/banner';
 import { Button } from '@cloudflare/kumo/components/button';
+import { Checkbox } from '@cloudflare/kumo/components/checkbox';
 import { LayerCard } from '@cloudflare/kumo/components/layer-card';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { Input } from '@cloudflare/kumo/components/input';
 import { Text } from '@cloudflare/kumo/components/text';
 import { Actions, AppHeader, NetworkBadge } from './brand.jsx';
+import { Section, TextField } from './components.jsx';
 import { ui, onState } from './api.js';
 import { busyText, dust, shortAddress, shortType } from './format.js';
 import { describeToken, tokenAmount, tokenTitle, tokenUnit, useTokenLabels } from './tokens.js';
@@ -129,8 +133,7 @@ function Effect({ described, payFees, labels, dustFee }) {
       <LayerCard.Secondary>Effect on this wallet</LayerCard.Secondary>
       <LayerCard.Primary className="flex flex-col divide-y divide-kumo-hairline">
         {deltas.filter(d => d.kind !== 'dust').map(d => <TokenLine key={`${d.kind}.${d.type}`} item={d} labels={labels} sign="+" />)}
-        {!deltas.some(d => d.kind !== 'dust') && <Row label="Tokens"><Text variant="secondary" size="sm">No change</Text></Row>}
-        {dustFee && (
+        {!deltas.some(d => d.kind !== 'dust') && <Row label="Tokens"><Text variant="secondary" size="sm">No change</Text></Row>}        {dustFee && (
           <Row label="Network fee">
             {payFees === false ? <Text variant="secondary" size="sm">Not paid by this wallet</Text> : `${dustText(described.fee)} DUST`}
           </Row>
@@ -173,7 +176,8 @@ function Details({ described }) {
       <div className="flex flex-col divide-y divide-kumo-hairline">
         <Row label="Unshielded inputs">{inputs.length} ({mine(inputs)} yours)</Row>
         <Row label="Unshielded outputs">{outputs.length} ({mine(outputs)} to you)</Row>
-        <Row label="Shielded inputs / outputs">{described.shielded?.inputs ?? '0'} / {described.shielded?.outputs ?? '0'}</Row>
+        <Row label="Shielded inputs">{described.shielded?.inputs ?? '0'} ({described.shielded?.spent ?? 0} yours)</Row>
+        <Row label="Shielded outputs">{described.shielded?.outputs ?? '0'} ({described.shielded?.received ?? 0} to you)</Row>
         <Row label="DUST spends">{described.dust?.spends ?? 0}</Row>
         {(described.maintenance?.length ?? 0) > 0 && <Row label="Contract updates">{described.maintenance.length}</Row>}
         {(described.dust?.registrations ?? 0) > 0 && <Row label="DUST registrations">{described.dust.registrations}</Row>}
@@ -236,9 +240,87 @@ function Payload({ data, encoding }) {
   return <Pre>{text ?? hex}</Pre>;
 }
 
+/** A connect that switches network: what the site asks for, and the choice
+ *  when several of the wallet's networks have that network id. */
+function SwitchNetwork({ params, networkLabel, choice, onChoose }) {
+  return (
+    <LayerCard>
+      <LayerCard.Secondary>This site asks for {params.choices ? <span className="font-mono">{params.networkId}</span> : networkLabel}</LayerCard.Secondary>
+      <LayerCard.Primary className="flex flex-col gap-2">
+        {params.choices && (
+          <div role="radiogroup" aria-label="Network" className="flex flex-col gap-1.5">
+            {params.choices.map(c => (
+              <button key={c.id} type="button" role="radio" aria-checked={c.id === choice} onClick={() => onChoose(c.id)}
+                className={`flex flex-col items-start gap-0.5 rounded-lg border px-3 py-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus/50 ${c.id === choice ? 'border-kumo-brand bg-kumo-info-tint' : 'border-kumo-line'}`}>
+                <span className="text-sm font-medium">{c.name}</span>
+                <span className="font-mono text-[11px] break-all text-kumo-subtle">{c.node}</span>
+              </button>
+            ))}
+          </div>
+        )}
+        <Text variant="secondary" size="sm">
+          {`Connecting switches mdwa from ${params.switchFrom} to ${params.choices ? 'the network you choose' : networkLabel}. Sites connected on ${params.switchFrom} are disconnected.`}
+        </Text>
+      </LayerCard.Primary>
+    </LayerCard>
+  );
+}
+
+/** A network a site offers, in the "Add a network" form's fields, read-only. */
+function OfferedNetwork({ definition: d }) {
+  const field = (label, value, mono = true) => <TextField label={label} mono={mono} value={value} readOnly spellCheck={false} />;
+  return (
+    <>
+      {field('Name', d.name, false)}
+      {field('Network id', d.networkId)}
+      {field('Indexer HTTP', d.indexerHttp)}
+      {field('Indexer WebSocket', d.indexerWs)}
+      <Section title="Transactions go to">
+        {d.submitUrl ? field('HTTP endpoint (submit URL)', d.submitUrl) : field('Midnight node (RPC)', d.node)}
+      </Section>
+      <Checkbox label={<span className="text-[13px]">This network has DUST</span>} checked={d.dust} disabled />
+      {!d.dust && <p className="text-xs leading-normal text-kumo-subtle">Without DUST, transactions pay no fee, and the wallet shows no DUST.</p>}
+      {field('First block', d.genesisHash)}
+      <Text variant="secondary" size="xs">Adding it does not switch to it. The wallet checks this first block at every start, so another chain behind these addresses is refused.</Text>
+    </>
+  );
+}
+
+/** A token label a site suggests. */
+function SuggestedLabel({ params }) {
+  const { label, contract, replaces } = params;
+  return (
+    <>
+      <LayerCard>
+        <LayerCard.Secondary className="flex items-center justify-between">
+          <span>This site suggests a name for a token</span>
+          <Badge variant="secondary">{label.kind}</Badge>
+        </LayerCard.Secondary>
+        <LayerCard.Primary className="flex flex-col divide-y divide-kumo-hairline">
+          <Row label="Name">{label.name}</Row>
+          <Row label="Symbol">{label.symbol}</Row>
+          <Row label="Decimals">{label.decimals}</Row>
+          <Row label="Token type">
+            <span className="block font-mono text-[11px] leading-[1.5]">{label.type.slice(0, 32)}</span>
+            <span className="block font-mono text-[11px] leading-[1.5]">{label.type.slice(32)}</span>
+          </Row>
+        </LayerCard.Primary>
+      </LayerCard>
+      {contract ? (
+        <Banner icon={<CheckIcon />} title="Minted by this contract" description={`Contract ${shortAddress(contract.address, 10)} with the domain separator given produces this token type. Its name is still the site's choice.`} />
+      ) : (
+        <Text variant="secondary" size="xs">The site names no contract, so nothing ties this name to the token's minter: it is the site's word only.</Text>
+      )}
+      {replaces && <Banner variant="secondary" description={`Replaces your name for it: ${replaces.name} (${replaces.symbol}).`} />}
+    </>
+  );
+}
+
 const COPY = {
   unlock: { title: 'Unlock mdwa?', icon: LockKeyOpenIcon, action: 'Unlock' },
   connect: { title: 'Connect to this site?', icon: PlugsConnectedIcon, action: 'Connect' },
+  addNetwork: { title: 'Add this network?', icon: GlobeHemisphereWestIcon, action: 'Add network' },
+  watchToken: { title: 'Name this token?', icon: TagIcon, action: 'Save name' },
   permissions: { title: 'Allow these requests?', icon: ShieldCheckIcon, action: 'Allow' },
   transaction: { title: 'Approve transaction?', icon: SignatureIcon, action: 'Approve' },
   transfer: { title: 'Send from this wallet?', icon: PaperPlaneTiltIcon, action: 'Send' },
@@ -246,7 +328,7 @@ const COPY = {
   signData: { title: 'Sign message?', icon: PenNibIcon, action: 'Sign' },
 };
 
-function Body({ request, networkLabel, state, labels }) {
+function Body({ request, networkLabel, state, labels, choice, onChoose }) {
   const { kind, params } = request;
   const dustFee = state.networks.find(n => n.id === params.network)?.dust !== false;
   if (params.error) {
@@ -256,19 +338,26 @@ function Body({ request, networkLabel, state, labels }) {
   switch (kind) {
     case 'unlock':
       return <Text variant="secondary" size="sm">The wallet is unlocked.</Text>;
+    case 'addNetwork':
+      return <OfferedNetwork definition={params.definition} />;
+    case 'watchToken':
+      return <SuggestedLabel params={params} />;
     case 'connect':
       return (
-        <LayerCard>
-          <LayerCard.Secondary>On {networkLabel}, this site will be able to</LayerCard.Secondary>
-          <LayerCard.Primary className="flex flex-col gap-2">
-            {['See your addresses and unshielded balances', 'Prove transactions with this wallet and submit them',
-              'Ask you to approve transactions, transfers, swap offers and signatures',
-              'Ask you before it sees shielded balances, DUST or history'].map(line => (
-              <span key={line} className="flex items-start gap-2 text-sm"><CheckIcon size={14} className="mt-0.5 shrink-0 text-kumo-success" /> {line}</span>
-            ))}
-            <Text variant="secondary" size="xs">It can never move funds or sign without your approval.</Text>
-          </LayerCard.Primary>
-        </LayerCard>
+        <>
+          {params.switchFrom && <SwitchNetwork params={params} networkLabel={networkLabel} choice={choice} onChoose={onChoose} />}
+          <LayerCard>
+            <LayerCard.Secondary>On {params.choices && !choice ? 'that network' : networkLabel}, this site will be able to</LayerCard.Secondary>
+            <LayerCard.Primary className="flex flex-col gap-2">
+              {['See your addresses and unshielded balances', 'Prove transactions with this wallet and submit them',
+                'Ask you to approve transactions, transfers, swap offers and signatures',
+                'Ask you before it sees shielded balances, DUST or history'].map(line => (
+                <span key={line} className="flex items-start gap-2 text-sm"><CheckIcon size={14} className="mt-0.5 shrink-0 text-kumo-success" /> {line}</span>
+              ))}
+              <Text variant="secondary" size="xs">It can never move funds or sign without your approval.</Text>
+            </LayerCard.Primary>
+          </LayerCard>
+        </>
       );
     case 'permissions':
       return (
@@ -335,6 +424,7 @@ function App() {
   const [error, setError] = useState(null);
   const [unlockError, setUnlockError] = useState(null);
   const [deciding, setDeciding] = useState(null);   // 'approve' | 'reject' while the engine answers
+  const [choice, setChoice] = useState(null);       // the network picked, when a connect offers several
   const labels = useTokenLabels(state?.network);
   useEffect(() => {
     const load = () => approval('get').then(r => (r?.error ? setError(r.error.message) : setRequest(r.result)));
@@ -351,13 +441,19 @@ function App() {
   if (error && !request) return <div className="p-4"><Banner variant="error" description={error} /></div>;
   if (!request || !state) return <div className="flex items-center justify-center gap-2 p-8"><Loader /><Text variant="secondary">Loading…</Text></div>;
 
-  const copy = COPY[request.kind] ?? { title: 'Approve request?', icon: SignatureIcon, action: 'Approve' };
-  const network = request.params?.network ?? state.network;
+  const copy = request.kind === 'connect' && request.params?.switchFrom
+    ? { title: 'Switch network and connect?', icon: PlugsConnectedIcon, action: 'Switch and connect' }
+    : COPY[request.kind] ?? { title: 'Approve request?', icon: SignatureIcon, action: 'Approve' };
+  const network = (request.params?.choices ? choice : request.params?.network) ?? state.network;
   const networkLabel = state.networks.find(n => n.id === network)?.name ?? network;
-  const locked = state.hasWallet && state.locked;
+  // A network a site offers, a token name, and a connect that switches
+  // network (the wallet it switches to may have a password of its own,
+  // asked for once it is selected) need the selected wallet's keys for nothing.
+  const needsUnlock = !['addNetwork', 'watchToken'].includes(request.kind) && !(request.kind === 'connect' && request.params?.switchFrom);
+  const locked = needsUnlock && state.hasWallet && state.locked;
   const decide = async approved => {
     setDeciding(approved ? 'approve' : 'reject'); setError(null);
-    const reply = await approval('decide', { approved });
+    const reply = await approval('decide', { approved, choice });
     if (reply?.error) { setError(reply.error.message); setDeciding(null); return; }
     window.close();
   };
@@ -371,7 +467,7 @@ function App() {
   };
   const Icon = copy.icon;
   const working = deciding === 'approve';
-  const blocked = !!request.params?.preparing || !!request.params?.error;
+  const blocked = !!request.params?.preparing || !!request.params?.error || (!!request.params?.choices && !choice);
   return (
     <form className="flex min-h-screen flex-col" onSubmit={e => { e.preventDefault(); if (locked) unlock(); else if (!blocked) decide(true); }}>
       <AppHeader network={<NetworkBadge network={network} name={networkLabel} />} />
@@ -390,7 +486,7 @@ function App() {
           <Input type="password" label="Password" value={password} onChange={e => setPassword(e.target.value)} autoFocus
             autoComplete="current-password" description={`Unlocks ${state.ownWallet ? `the ${networkLabel} wallet` : 'the wallet'} so you can review this request.`}
             error={unlockError ?? undefined} variant={unlockError ? 'error' : 'default'} />
-        ) : <Body request={request} networkLabel={networkLabel} state={state} labels={labels} />}
+        ) : <Body request={request} networkLabel={networkLabel} state={state} labels={labels} choice={choice} onChoose={setChoice} />}
         {working && <Banner size="sm" icon={<ClockCounterClockwiseIcon />} description={preparingText(state)} />}
         {error && <Banner variant="error" size="sm" description={error} />}
         <div className="mt-auto">

@@ -5,6 +5,7 @@
 // offscreen document's worker; this worker never holds seeds.
 // Passwords typed into a page pass through here to the engine and are not
 // kept.
+import { networksMatching } from '../../wallet/networks.mjs';
 
 const BUILD = __BUILD_ID__;
 
@@ -167,12 +168,15 @@ chrome.windows.onRemoved.addListener(windowId => {
   for (const entry of approvals.values()) if (entry.windowId === windowId) entry.resolve({ approved: false });
 });
 
-async function decide(id, approved) {
+async function decide(id, approved, choice = null) {
   const entry = approvals.get(id);
   if (!entry) throw new Error('This request is no longer pending');
   if (approved && entry.params?.preparing) throw new Error('The wallet is still preparing this request');
   if (approved && entry.params?.error) throw new Error('This request cannot be approved');
-  let outcome = { approved };
+  // A window that offers choices (a connect naming several networks) is
+  // approved with one of them.
+  if (approved && entry.params?.choices && !entry.params.choices.some(c => c.id === choice)) throw new Error('Choose a network');
+  let outcome = { approved, choice };
   if (approved && entry.perform) {
     try { outcome = { approved: true, result: await entry.perform() }; } catch (error) { outcome = { approved: true, error }; }
   }
@@ -188,12 +192,15 @@ async function decide(id, approved) {
 // page says.
 //
 // Permission model:
-// - connect(networkId) asks the user once per site and network (the
-//   `connect` window) and stores the site under `sites`. A connection is
-//   bound to the network it was made on: after the user switches network,
-//   removes the wallet or disconnects the site, every call of that
+// - connect(networkId, { endpoint }) asks the user once per site and
+//   network (the `connect` window), switching network when it names
+//   another (see connect below), and stores the site under `sites`. A
+//   connection is bound to the network it was made on: after a switch of
+//   network, a removed wallet or a disconnected site, every call of that
 //   connection fails with Disconnected and getConnectionStatus says
 //   'disconnected' until the dApp connects again.
+// - addNetwork (on the wallet object) and watchToken (connected) go beyond
+//   the API: a network or a token name the user approves in a window.
 // - Free once connected: getConfiguration, getConnectionStatus, hintUsage,
 //   the three address methods (Midnight.js needs the shielded keys up
 //   front, and addresses are given out to be paid anyway),
@@ -217,6 +224,9 @@ const WALLET_METHODS = new Set([
   'signData', 'submitTransaction', 'getProvingProvider', 'getConfiguration', 'getConnectionStatus',
 ]);
 const GATED = new Set(['getShieldedBalances', 'getDustBalance', 'getTxHistory']);
+// Beside the API's own: hintUsage, and watchToken, which this wallet adds
+// (free once connected; the user approves each label in a window).
+const EXTRA_METHODS = new Set(['hintUsage', 'watchToken']);
 const PROVER_CALLS = { _proverHasKey: 'proverHasKey', _proverPutKey: 'proverPutKey', _proverCheck: 'proverCheck', _proverProve: 'proverProve' };
 const CODES = new Set(['InternalError', 'Rejected', 'InvalidRequest', 'PermissionRejected', 'Disconnected', 'InsufficientFunds']);
 const apiError = (code, reason) => Object.assign(new Error(reason), { apiCode: code });
@@ -288,25 +298,123 @@ async function requirePermission(session, origin, network, method) {
   if (!(await askPermissions(session, origin, network, [method]))) throw apiError('PermissionRejected', `${method} is not allowed for this site`);
 }
 
-async function connect(session, origin, networkId) {
-  if (typeof networkId !== 'string' || !networkId) throw apiError('InvalidRequest', 'connect needs a network id');
-  const context = await engine('connector', 'connectorContext');
-  if (!context.hasWallet) throw apiError('InternalError', `No wallet on ${context.name}: create or restore one in mdwa first`);
-  if (networkId !== context.networkId) {
-    throw apiError('InvalidRequest', `mdwa is on ${context.name} (${context.networkId}), not ${networkId}: switch network in mdwa to connect`);
-  }
+// connect(networkId, { endpoint }) names the networks of the wallet with that
+// network id, narrowed by `endpoint` (where transactions go, as
+// getConfiguration reports it). One of them selected: as on any connect.
+// Otherwise the wallet switches, through the engine's own switch (the old
+// network's session stops and saves, and its connections end): silently to
+// the network the site is approved on, else after the Connect window, which
+// names the network asked for, says that approving switches to it, and lets
+// the user pick when several match. A switch is refused while another
+// request's window is open or the wallet is busy on the selected network, and
+// switching connects run one at a time, so two cannot interleave.
+const noWalletOn = name => apiError('InternalError', `No wallet on ${name}: create or restore one in mdwa first`);
+const noNetwork = (networkId, endpoint) => apiError('InvalidRequest', `No network ${networkId} in mdwa${endpoint ? ` at ${endpoint}` : ''}: add it to mdwa to connect`);
+
+async function bindConnection(session, origin, context) {
+  if (!context.hasWallet) throw noWalletOn(context.name);
   if (!(await siteOf(context.network, origin))) {
     const { approved } = await openApproval('connect', origin, { network: context.network }).decision;
     if (!approved) throw apiError('Rejected', 'The user refused the connection');
-    await updateSites(sites => {
-      sites[context.network] ??= {};
-      sites[context.network][origin] ??= { grantedAt: Date.now(), permissions: [] };
-    });
+    await approveSite(context.network, origin);
   }
+  return newConnection(session, context);
+}
+const approveSite = (network, origin) => updateSites(sites => {
+  sites[network] ??= {};
+  sites[network][origin] ??= { grantedAt: Date.now(), permissions: [] };
+});
+async function newConnection(session, context) {
   const connectionId = crypto.randomUUID();
   session.connections[connectionId] = { network: context.network, connectedAt: Date.now() };
   await saveSessions();
   return { connectionId, networkId: context.networkId };
+}
+
+async function connect(session, origin, networkId, options) {
+  if (typeof networkId !== 'string' || !networkId) throw apiError('InvalidRequest', 'connect needs a network id');
+  if (options !== undefined && options !== null && typeof options !== 'object') throw apiError('InvalidRequest', 'options must be an object');
+  const endpoint = options?.endpoint ?? null;
+  if (endpoint !== null && (typeof endpoint !== 'string' || !URL.canParse(endpoint))) throw apiError('InvalidRequest', 'endpoint must be a URL');
+  const context = await engine('connector', 'connectorContext');
+  const matching = networksMatching(await engine('connector', 'connectorNetworks'), networkId, endpoint);
+  if (!matching.length) throw noNetwork(networkId, endpoint);
+  if (matching.some(n => n.id === context.network)) return bindConnection(session, origin, context);
+  return oneSwitchAtATime(() => switchAndConnect(session, origin, networkId, endpoint));
+}
+
+let switching = Promise.resolve();
+function oneSwitchAtATime(run) {
+  const next = switching.then(run);
+  switching = next.catch(() => {});
+  return next;
+}
+
+// A switch must not cut short another request: a window of it still open,
+// or the engine at work on the selected network.
+function refuseWhileBusy(context) {
+  if (approvals.size || context.busy) {
+    throw apiError('InternalError', `mdwa is busy with another request on ${context.name}: finish it, then connect again`);
+  }
+}
+
+async function switchAndConnect(session, origin, networkId, endpoint) {
+  // Read again: an earlier connect may have switched meanwhile.
+  const context = await engine('connector', 'connectorContext');
+  const matching = networksMatching(await engine('connector', 'connectorNetworks'), networkId, endpoint);
+  if (!matching.length) throw noNetwork(networkId, endpoint);
+  if (matching.some(n => n.id === context.network)) return bindConnection(session, origin, context);
+  const withWallet = matching.filter(n => n.hasWallet);
+  if (!withWallet.length) throw noWalletOn(matching[0].name);
+  const approvedOn = [];
+  for (const n of withWallet) if (await siteOf(n.id, origin)) approvedOn.push(n);
+  refuseWhileBusy(context);
+  let target = withWallet.length === 1 ? withWallet[0] : approvedOn.length === 1 ? approvedOn[0] : null;
+  const asked = !target || !approvedOn.includes(target);
+  if (asked) {
+    const choices = target ? null : withWallet.map(n => ({ id: n.id, name: n.name, node: n.node }));
+    const entry = openApproval('connect', origin, { network: target?.id ?? null, networkId, switchFrom: context.name, choices });
+    const outcome = await entry.decision;
+    if (!outcome.approved) throw apiError('Rejected', 'The user refused the connection');
+    target ??= withWallet.find(n => n.id === outcome.choice);
+    refuseWhileBusy(await engine('connector', 'connectorContext'));
+  }
+  await engine('connector', 'switchNetwork', { network: target.id });
+  if (asked) await approveSite(target.id, origin);
+  return newConnection(session, await engine('connector', 'connectorContext'));
+}
+
+// addNetwork(definition) on the wallet object: a network a site offers. The
+// same network id and addresses as one the wallet has is `exists`, without a
+// window; anything else is checked as a definition typed in the popup is
+// (first block read from its indexer) before the window shows it, and is
+// added, not selected, once the user approves.
+const DEFINITION_KEYS = ['name', 'networkId', 'indexerHttp', 'indexerWs', 'node', 'submitUrl', 'dust'];
+function definitionOf(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) throw apiError('InvalidRequest', 'addNetwork takes a network definition');
+  const unknown = Object.keys(value).filter(k => !DEFINITION_KEYS.includes(k));
+  if (unknown.length) throw apiError('InvalidRequest', `A network definition has no ${unknown.join(', ')}`);
+  for (const key of ['name', 'networkId', 'indexerHttp', 'indexerWs']) {
+    if (typeof value[key] !== 'string') throw apiError('InvalidRequest', `${key} is a string`);
+  }
+  const via = ['node', 'submitUrl'].filter(k => value[k] !== undefined && value[k] !== null);
+  if (via.length !== 1 || typeof value[via[0]] !== 'string') throw apiError('InvalidRequest', 'A network definition has a node or a submitUrl, one of them, as a string');
+  if (value.dust !== undefined && value.dust !== null && typeof value.dust !== 'boolean') throw apiError('InvalidRequest', 'dust is true or false');
+  return {
+    name: value.name, networkId: value.networkId, indexerHttp: value.indexerHttp, indexerWs: value.indexerWs,
+    [via[0]]: value[via[0]], dust: value.dust !== false,
+  };
+}
+async function addNetwork(origin, value) {
+  const definition = definitionOf(value);
+  const checked = await engine('connector', 'checkNetwork', { definition });
+  if (checked.exists) return { status: 'exists' };
+  const entry = openApproval('addNetwork', origin, { definition: checked.definition },
+    () => engine('connector', 'addNetwork', { definition }));
+  const outcome = await entry.decision;
+  if (!outcome.approved) throw apiError('Rejected', 'The user declined to add the network');
+  if (outcome.error) throw outcome.error;
+  return outcome.result;
 }
 
 /** The connection's network if it is still live, else null. */
@@ -372,7 +480,7 @@ const optionPayFees = options => {
 async function call(session, origin, { connectionId, method, args = [] }) {
   if (typeof method !== 'string' || !Array.isArray(args)) throw apiError('InvalidRequest', 'Malformed request');
   const internal = Object.hasOwn(PROVER_CALLS, method);
-  if (!WALLET_METHODS.has(method) && method !== 'hintUsage' && !internal) throw apiError('InvalidRequest', `Unknown method ${method}`);
+  if (!WALLET_METHODS.has(method) && !EXTRA_METHODS.has(method) && !internal) throw apiError('InvalidRequest', `Unknown method ${method}`);
   const live = await liveNetwork(session.connections[connectionId], origin);
   if (method === 'getConnectionStatus') return live ? { status: 'connected', networkId: live.networkId } : { status: 'disconnected' };
   if (!live) throw apiError('Disconnected', 'This connection has ended: connect again');
@@ -387,6 +495,20 @@ async function call(session, origin, { connectionId, method, args = [] }) {
       const ask = [...new Set(names)].filter(n => GATED.has(n) && !session.rejected.includes(n) && !site?.permissions?.includes(n));
       if (ask.length) await askPermissions(session, origin, network, ask);
       return null;
+    }
+    // A label a site suggests for a token, on the connection's network: no
+    // window when the same label is saved, else the window shows it.
+    case 'watchToken': {
+      const request = args[0];
+      if (!request || typeof request !== 'object' || Array.isArray(request)) throw apiError('InvalidRequest', 'watchToken takes { kind, tokenType, name, … }');
+      const checked = await engine('connector', 'checkTokenLabel', { request });
+      if (checked.exists) return { status: 'exists' };
+      const entry = openApproval('watchToken', origin, { network, ...checked },
+        () => engine('connector', 'saveTokenLabel', { network, request }));
+      const outcome = await entry.decision;
+      if (!outcome.approved) throw apiError('Rejected', 'The user declined the token name');
+      if (outcome.error) throw outcome.error;
+      return outcome.result;
     }
     case 'getConfiguration':
       return engine('connector', method, { origin });
@@ -452,7 +574,8 @@ async function dappRequest(port, message) {
   const sender = port.sender;
   const origin = sender.origin ?? new URL(sender.url).origin;
   const session = await sessionOf(sender.documentId ?? `${sender.tab.id}:${sender.frameId}`, origin, sender.tab.id);
-  if (message.op === 'connect') return connect(session, origin, message.networkId);
+  if (message.op === 'connect') return connect(session, origin, message.networkId, message.options);
+  if (message.op === 'addNetwork') return addNetwork(origin, message.definition);
   if (message.op === 'call') return call(session, origin, message);
   if (message.op === 'blob') {
     // Only a connected page may upload, so an unconnected site cannot fill
@@ -520,7 +643,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       return false;
     }
     if (message.action === 'decide') {
-      decide(entry.id, !!message.approved).then(result => respond({ result }), error => respond({ error: { message: error.message } }));
+      decide(entry.id, !!message.approved, typeof message.choice === 'string' ? message.choice : null).then(result => respond({ result }), error => respond({ error: { message: error.message } }));
       return true;
     }
     return false;

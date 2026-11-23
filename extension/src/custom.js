@@ -133,7 +133,11 @@ export function checkNetworkId(id) {
 
 /** The hash of the chain's first block (height 0), from the indexer. */
 export async function genesisHash(indexerHttp) {
-  const hash = (await gql(indexerHttp, '{ block(offset: { height: 0 }) { hash } }')).block?.hash;
+  let data;
+  try { data = await gql(indexerHttp, '{ block(offset: { height: 0 }) { hash } }'); } catch (error) {
+    throw new Error(`The indexer at ${indexerHttp} could not be read: ${error?.message ?? error}`);
+  }
+  const hash = data.block?.hash;
   if (typeof hash !== 'string' || !/^[0-9a-f]{64}$/i.test(hash)) throw new Error(`The indexer at ${indexerHttp} reports no first block`);
   return hash.toLowerCase();
 }

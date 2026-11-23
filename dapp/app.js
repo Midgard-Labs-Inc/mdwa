@@ -86,12 +86,19 @@ const myAddresses = async () => ({ ...(await api.getUnshieldedAddress()), ...(aw
 
 const actions = {
   inspect: async () => inspect(),
-  connect: async () => {
-    api = await wallet().connect(networkId());
+  // With an endpoint, connect names one of several networks with this id; a
+  // wallet on another network switches (see "Beyond the standard API").
+  connect: async (id = networkId(), endpoint = $('endpoint').value.trim()) => {
+    api = await wallet().connect(id, endpoint ? { endpoint } : undefined);
+    counter.providers = null;
     $('icon').src = wallet().icon;
     return { frozen: Object.isFrozen(api), methods: Object.keys(api), status: await api.getConnectionStatus() };
   },
-  connectWrongNetwork: async () => wallet().connect(networkId() === 'mainnet' ? 'preview' : 'mainnet'),
+  addNetwork: async definition => wallet().addNetwork(definition ?? JSON.parse($('definition').value)),
+  watchToken: async request => api.watchToken(request ?? JSON.parse($('token').value)),
+  // A network id no wallet has: mdwa answers "No network …" (any other id it
+  // has, it switches to).
+  connectWrongNetwork: async () => wallet().connect('no-such-network'),
   getConnectionStatus: () => api.getConnectionStatus(),
   getConfiguration: () => api.getConfiguration(),
   getShieldedAddresses: () => api.getShieldedAddresses(),

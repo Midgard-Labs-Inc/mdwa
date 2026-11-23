@@ -164,6 +164,44 @@ export async function setLabel(store, params) {
   return saved;
 }
 
+/**
+ * A label a site suggests (the connector's watchToken), checked as a typed
+ * one is against the network's labels `all` (as stored, by `kind:type`).
+ * A symbol left out is the name when the name fits a symbol, since every
+ * label has one. `contract` and `domainSeparator` come together; the pair
+ * must produce the token type. Returns `{ label, contract, exists, replaces }`:
+ * `exists` when the same name, symbol and decimals (and contract, when
+ * given) are saved already, `replaces` the label it would change, or null.
+ */
+export function pageLabel(request, all = {}) {
+  const { kind, tokenType, name, symbol, decimals, contract: address, domainSeparator } = request ?? {};
+  if (typeof tokenType !== 'string' || typeof name !== 'string') throw new Error('tokenType and name are strings');
+  if (symbol !== undefined && symbol !== null && typeof symbol !== 'string') throw new Error('symbol is a string');
+  if (decimals !== undefined && decimals !== null && !Number.isInteger(decimals)) throw new Error(`Decimals are a whole number from 0 to ${LIMITS.decimals}`);
+  const given = [address, domainSeparator].filter(v => v !== undefined && v !== null);
+  if (given.length === 1 || given.some(v => typeof v !== 'string')) throw new Error('contract and domainSeparator are strings, given together');
+  const type = tokenTypeOf(tokenType);
+  const others = Object.values(all).filter(l => !(l.type === type && l.kind === kind));
+  const shortName = chars(name.trim()) <= LIMITS.symbol ? name.trim() : null;
+  if ((symbol ?? null) === null && !shortName) throw new Error(`A name over ${LIMITS.symbol} characters needs a symbol of 1 to ${LIMITS.symbol}`);
+  const label = checkLabel({ type, kind, name, symbol: symbol ?? shortName, decimals: decimals ?? 0 }, others);
+  let contract = null;
+  if (given.length) {
+    const contractAddress = contractAddressOf(address);
+    const domain = domainSeparatorOf(domainSeparator);
+    if (!domain) throw new Error('The domain separator is empty');
+    if (deriveTokenType(domain, contractAddress) !== label.type) throw new Error('This contract and domain separator do not produce this token type');
+    contract = { address: contractAddress, domainSeparator: hex(domain) };
+  }
+  const saved = all[keyOf(label.kind, label.type)] ?? null;
+  const exists = !!saved && saved.name === label.name && saved.symbol === label.symbol && saved.decimals === label.decimals
+    && (!contract || (saved.contract?.address === contract.address && saved.contract?.domainSeparator === contract.domainSeparator));
+  return { label, contract, exists, replaces: saved && !exists ? { name: saved.name, symbol: saved.symbol, decimals: saved.decimals } : null };
+}
+
+/** Every label of a store's network, by `kind:type`. */
+export const labelMap = async store => (await store.get(LABELS_KEY)) ?? {};
+
 export async function removeLabel(store, { type, kind }) {
   const all = (await store.get(LABELS_KEY)) ?? {};
   delete all[keyOf(kindOf(kind), tokenTypeOf(type))];

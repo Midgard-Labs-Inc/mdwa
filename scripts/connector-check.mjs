@@ -243,7 +243,7 @@ try {
   };
 
   await step('inspect', act('inspect'));
-  await step('connect wrong network', act('connectWrongNetwork'));
+  await step('connect unknown network', act('connectWrongNetwork'));
   // Rejected, then approved, then already approved (no window).
   let pending = act('connect');
   await answer('Reject', { expect: /Connect to this site\?/ });

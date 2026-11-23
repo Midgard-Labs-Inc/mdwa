@@ -18,7 +18,8 @@
 // needs the keys to read the chain), and its snapshot stays encrypted.
 import { firstValueFrom, filter, timeout } from 'rxjs';
 import {
-  DEFAULT_NETWORK, checkedEndpoints, connectionUrls, defaultEndpoints, endpointsOf, network, networkIds, userNetworkKey,
+  DEFAULT_NETWORK, checkedEndpoints, connectionUrls, defaultEndpoints, endpointsOf, network, networkIds, publicEndpoints, sameEndpoint,
+  userNetworkKey,
 } from '../../wallet/networks.mjs';
 import * as db from './db.js';
 import * as vault from './vault.js';
@@ -836,11 +837,86 @@ const ui = {
 // The dApp connector's table (envelope kind 'connector', see connector.js).
 // The background checks connections and permissions before it calls any of
 // these; connectorContext is what it binds a site's connection to.
+const connectorFail = (code, message) => Object.assign(new Error(message), { code });
+const asInvalid = async fn => {
+  try { return await fn(); } catch (error) { throw connectorFail(error.code ?? 'InvalidRequest', String(error?.message ?? error)); }
+};
+// Something on the selected network a switch would cut short: a transaction
+// being built, proved or sent, one waiting its turn, or one shown for review.
+const busyHere = () => !!state.busy || state.waiting.length > 0 || previews.size > 0;
+
+/** Every network as a site's connect sees it: its network id and where its
+ *  transactions go (`node`, as getConfiguration reports it), its indexer,
+ *  and whether it has a wallet. */
+async function connectorNetworks() {
+  return Promise.all(state.networks.map(async n => {
+    const def = network(n.id, userNetworks);
+    const e = await endpointsFor(n.id);
+    return {
+      ...n, node: publicEndpoints(def, e).node, submits: e.submitUrl ? 'http' : 'node', indexerHttp: e.indexerHttp, indexerWs: e.indexerWs,
+    };
+  }));
+}
+
+/** The network a site's definition (the connector's addNetwork) already
+ *  is: the same network id, indexer and place transactions go. */
+async function sameNetwork(definition) {
+  const http = 'submitUrl' in definition;
+  return (await connectorNetworks()).find(n => n.networkId === String(definition.networkId ?? '').trim()
+    && (n.submits === 'http') === http && sameEndpoint(n.node, http ? definition.submitUrl : definition.node)
+    && sameEndpoint(n.indexerHttp, definition.indexerHttp) && sameEndpoint(n.indexerWs, definition.indexerWs)) ?? null;
+}
+
+/** `name`, or with the lowest number from 2 appended that no network's name
+ *  has (within the 32 characters a name may have). */
+function freeName(name) {
+  const taken = new Set(networkIds(userNetworks).map(id => network(id, userNetworks).name.toLowerCase()));
+  const base = String(name ?? '').trim();
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${[...base].slice(0, 31 - String(n).length).join('').trimEnd()} ${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+}
+
 const connector = {
   connectorContext: async () => ({
     network: store.network, name: net().name, networkId: net().networkId,
-    hasWallet: state.hasWallet, locked: state.locked,
+    hasWallet: state.hasWallet, locked: state.locked, busy: busyHere(),
   }),
+  connectorNetworks,
+  // A site's connect switching network (the background asked the user, or
+  // the site is approved there): refused while something on the selected
+  // network is under way, then the popup's own switch.
+  switchNetwork: async ({ network: id }) => {
+    if (id !== store.network && busyHere()) {
+      throw connectorFail('InternalError', `mdwa is busy with a transaction on ${net().name}: finish or cancel it, then connect again`);
+    }
+    return selectNetwork({ network: id });
+  },
+  // A site's network definition: `exists` when the wallet has it, otherwise
+  // the definition checked as a typed one is (custom.defineNetwork, which
+  // reads the chain's first block), under a name no network has.
+  checkNetwork: async ({ definition }) => {
+    if (await sameNetwork(definition)) return { exists: true };
+    return { exists: false, definition: await asInvalid(() => custom.defineNetwork({ ...definition, name: freeName(definition.name) })) };
+  },
+  addNetwork: async ({ definition }) => {
+    if (await sameNetwork(definition)) return { status: 'exists' };
+    await asInvalid(() => saveNetwork({ ...definition, name: freeName(definition.name) }));
+    return { status: 'added' };
+  },
+  // A site's token label (watchToken), on the connection's network.
+  checkTokenLabel: async ({ request }) => {
+    const all = await tokens.labelMap(store);
+    return asInvalid(() => tokens.pageLabel(request, all));
+  },
+  saveTokenLabel: async ({ network: id, request }) => {
+    if (id !== store.network) throw connectorFail('Disconnected', 'mdwa switched network: connect again');
+    const { label, contract } = await asInvalid(async () => tokens.pageLabel(request, await tokens.labelMap(store)));
+    await asInvalid(() => tokens.setLabel(store, { ...label, ...(contract ? { contract } : {}) }));
+    return { status: 'added' };
+  },
   ...makeConnector({
     context: () => ({ ...net(), network: store.network }),
     live, storedWallet: wallet, endpointsFor, withBusy, releaseBusy, keepPreview, takePreview, dropPreview, noteTransaction, txMeta,

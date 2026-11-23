@@ -14,7 +14,8 @@
     h2 { font-size: 13px; text-transform: uppercase; color: #666; margin: 16px 0 6px; }
     button { margin: 2px; padding: 4px 8px; }
     label { display: block; margin: 4px 0; }
-    input { width: 100%; box-sizing: border-box; }
+    input, textarea { width: 100%; box-sizing: border-box; }
+    textarea { font: 12px ui-monospace, monospace; }
     pre { margin: 0 0 8px; padding: 8px; background: #fff; border-left: 3px solid #2a7; white-space: pre-wrap; word-break: break-all; }
     pre.err { border-color: #c33; }
     img { width: 24px; height: 24px; }
@@ -24,13 +25,19 @@
   <aside>
     <h1><img id="icon" alt=""> mdwa test dApp</h1>
     <label>Network id <input id="network" value="undeployed"></label>
+    <label>Endpoint (optional: node or submit URL) <input id="endpoint"></label>
     <h2>Connection</h2>
     <button data-action="inspect">Inspect window.midnight</button>
     <button data-action="connect">connect</button>
-    <button data-action="connectWrongNetwork">connect (wrong network)</button>
+    <button data-action="connectWrongNetwork">connect (unknown network)</button>
     <button data-action="getConnectionStatus">getConnectionStatus</button>
     <button data-action="getConfiguration">getConfiguration</button>
     <button data-action="hintUsage">hintUsage</button>
+    <h2>Beyond the standard API</h2>
+    <label>Network definition (JSON) <textarea id="definition" rows="7">{ "name": "Local", "networkId": "undeployed", "indexerHttp": "http://127.0.0.1:8088/api/v4/graphql", "indexerWs": "ws://127.0.0.1:8088/api/v4/graphql/ws", "node": "ws://127.0.0.1:9944", "dust": true }</textarea></label>
+    <button data-action="addNetwork">addNetwork</button>
+    <label>Token (JSON) <textarea id="token" rows="5">{ "kind": "shielded", "tokenType": "1111111111111111111111111111111111111111111111111111111111111111", "name": "Test token", "symbol": "TEST", "decimals": 2 }</textarea></label>
+    <button data-action="watchToken">watchToken</button>
     <h2>Reads</h2>
     <button data-action="getShieldedAddresses">getShieldedAddresses</button>
     <button data-action="getUnshieldedAddress">getUnshieldedAddress</button>

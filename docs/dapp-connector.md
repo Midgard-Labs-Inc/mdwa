@@ -11,6 +11,7 @@ wallet, see the [technical overview](technical.md).
 - [Installing on the page](#installing-on-the-page)
 - [Request path](#request-path)
 - [Connecting](#connecting)
+- [Beyond the standard API](#beyond-the-standard-api)
 - [Permission model](#permission-model)
 - [Methods](#methods)
 - [Approval windows](#approval-windows)
@@ -34,7 +35,8 @@ object and its entries. The `InitialAPI` object is frozen:
 | `name` | `mdwa` |
 | `apiVersion` | `4.1.0` |
 | `icon` | a data URL of the brand mark |
-| `connect(networkId)` | asks to connect; returns the `ConnectedAPI` |
+| `connect(networkId, options?)` | asks to connect, switching network if needed; returns the `ConnectedAPI` (see [Connecting](#connecting)) |
+| `addNetwork(definition)` | offers a network to add; beyond the API (see [addNetwork](#addnetwork)) |
 
 Only top-level frames get the object, since the content scripts are not
 registered for iframes.
@@ -82,16 +84,51 @@ sequenceDiagram
 
 ## Connecting
 
-`connect(networkId)` succeeds only when mdwa's selected network has a wallet
-and its network id is the one asked for (for a network you defined, the
-network id in its definition). Otherwise it fails with
-`InvalidRequest` (a message naming mdwa's network, so the dApp can ask the user
-to switch) or `InternalError` (no wallet on that network).
+`connect(networkId, options?)` connects on the network the site names, and
+switches mdwa to it when another network is selected. `options` is optional:
+`{ endpoint?: string }`.
 
-The first time a site connects on a network, a **connect** window asks. An
-approved site is stored per network and connects again without a window. The
-window says what the site will be able to do and that it can never move funds
-or sign without approval.
+1. **Which networks.** mdwa takes its networks whose network id is
+   `networkId` (for a network you defined, the network id in its definition).
+   `endpoint`, when given, narrows them to the one whose node address, or for a
+   network that takes transactions over HTTP its submit URL (the value
+   `getConfiguration().substrateNodeUri` reports), is the same scheme, host,
+   port and path, a trailing slash and any query aside. When none is left, the
+   call fails with `InvalidRequest` and a message that begins
+   `No network <networkId> in mdwa`, so a page can offer to add one.
+2. **Already selected.** When the selected network is one of them, connect
+   works as before: the first time a site connects on a network, a **connect**
+   window asks, an approved site is stored per network and connects again
+   without a window, and a network without a wallet fails with
+   `InternalError`. The window says what the site will be able to do and that
+   it can never move funds or sign without approval.
+3. **Another network.** Otherwise mdwa switches and connects:
+   - **silently** when the site is already approved on that network;
+   - through the **connect** window when it is not. The window names the
+     network the site asks for and says that connecting switches mdwa from the
+     selected network to it. Rejecting leaves mdwa where it was and fails with
+     `Rejected`.
+   - When several networks match and `endpoint` does not single one out: the
+     one the site is approved on, if exactly one; otherwise the window lists
+     them (name and node address) and the user picks one.
+
+A switch is the popup's own: the old network's session stops and saves its
+snapshot, and the connections of every page on it end (below). It needs no
+password. A locked wallet stays locked, and the first call that needs the
+wallet opens the unlock window for the network switched to, which asks for
+that network's password when it keeps a wallet of its own. A network without
+a wallet fails as in step 2, before anything switches.
+
+A switch is refused, with `InternalError` and a message saying that mdwa is
+busy, while any other request's window is open (a transaction to approve, a
+signature, an unlock) or the wallet is building, proving or sending a
+transaction or showing one for review on the selected network. Connects that
+switch run one at a time, so two pages asking at once cannot interleave: the
+second sees the network the first left selected.
+
+A wallet without switching (an older mdwa, or another wallet) fails a connect
+for another network with `InvalidRequest` and a message containing
+`is on <X>, not <Y>`; a page can then ask the user to switch by hand.
 
 A connection is **bound to the network it was made on**. When you switch
 network, remove the wallet or disconnect the site, every call of that connection
@@ -99,11 +136,115 @@ fails with `Disconnected`, and `getConnectionStatus` answers `disconnected`,
 until the dApp connects again. Disconnecting a site in the Sites tab also
 removes its stored permissions.
 
+## Beyond the standard API
+
+mdwa adds two methods and one option to the DApp Connector API 4.1.0. They are
+generic: nothing in them names a network or a site. A page detects them with
+`typeof wallet.addNetwork === 'function'` and
+`typeof api.watchToken === 'function'`; the option is `connect`'s
+`{ endpoint }` (see [Connecting](#connecting)). Errors are the API's, as
+everywhere (see [Errors](#errors)).
+
+### addNetwork
+
+On the wallet object, beside `connect`:
+
+```ts
+addNetwork(definition: {
+  name: string;          // 1 to 32 characters
+  networkId: string;     // as the chain's addresses carry it
+  indexerHttp: string;   // the indexer's GraphQL HTTP URL
+  indexerWs: string;     // its GraphQL WebSocket URL
+  node?: string;         // a Midnight node's WebSocket RPC, or
+  submitUrl?: string;    // an HTTP endpoint transactions are POSTed to
+  dust?: boolean;        // whether the network has DUST; default true
+}): Promise<{ status: 'added' | 'exists' }>
+```
+
+- Exactly one of `node` and `submitUrl`. Any other field, or a field of the
+  wrong type, is `InvalidRequest`.
+- **Already there.** A network with the same network id and the same
+  addresses (indexer HTTP and WebSocket, and node or submit URL, compared as
+  `endpoint` is above) resolves `{ status: 'exists' }` without a window.
+- **Checked first.** Otherwise the definition gets exactly the checks a
+  definition typed in **Add a network…** gets (see
+  [Your own networks](technical.md#your-own-networks)): the network id's
+  characters, each URL's scheme and the extension's page policy, and the
+  chain's first block, read from the indexer and stored. A definition that
+  fails is `InvalidRequest` with the reason, without a window: an indexer that
+  does not answer, for example, is refused with
+  `The indexer at <url> could not be read: …`. A name another network has gets
+  the lowest number from 2 appended (`Local 2`) rather than failing.
+- **The window** shows the site and the definition in the fields of the
+  **Add a network** form, read-only, with the first block's hash. Approving
+  adds the network and resolves `{ status: 'added' }`; rejecting is
+  `Rejected`.
+- Adding does not select the network: `connect` to it does.
+
+### watchToken
+
+On the `ConnectedAPI`:
+
+```ts
+watchToken(request: {
+  kind: 'shielded' | 'unshielded';
+  tokenType: string;        // the raw token type, 64 hex characters
+  name: string;             // 1 to 32 characters
+  symbol?: string;          // 1 to 8 characters
+  decimals?: number;        // 0 to 18; default 0
+  contract?: string;        // the minting contract's address, 64 hex characters
+  domainSeparator?: string; // with contract: 64 hex characters, or the text of pad(32, "…")
+}): Promise<{ status: 'added' | 'exists' }>
+```
+
+- It saves a label for the token on the connection's network, under the
+  rules of labels typed in the wallet (see
+  [Custom tokens](technical.md#custom-tokens)): lengths, reserved names, no
+  control or invisible characters, no name or symbol another token has, NIGHT
+  cannot be renamed. A request that breaks one is `InvalidRequest` with the
+  reason.
+- **Symbol.** Every label has a symbol. Left out, it is the name when the name
+  is at most 8 characters; a longer name without a symbol is `InvalidRequest`.
+- **Already saved.** The same name, symbol and decimals saved for that type
+  and kind (and, when `contract` is given, saved with that contract and
+  separator) resolve `{ status: 'exists' }` without a window.
+- **Contract.** `contract` and `domainSeparator` come together. The wallet
+  computes the token type they produce (the ledger's `rawTokenType`); a pair
+  that does not produce `tokenType` is `InvalidRequest`. One that does is
+  stored with the label, and the window says the contract mints the token.
+- **The window** shows the site, the kind, the proposed name, symbol and
+  decimals, the full token type, the contract when given, and the label it
+  replaces when the token has another. Approving resolves
+  `{ status: 'added' }`; rejecting is `Rejected`.
+- No permission is asked beyond being connected; the window is the user's
+  say. The label applies whether or not the wallet holds the token yet.
+
+### The effect of a transaction
+
+Every window for a transaction (**Approve transaction**, **Send from this
+wallet**, **Create swap offer**) lists, under "Effect on this wallet", the
+shielded coins the wallet receives or spends, with the unshielded ones, each
+marked shielded. They are read from the balanced transaction itself:
+
+- **Spent:** the shielded inputs whose nullifier is one of the wallet's coins
+  (available or booked), as the SDK's state gives them.
+- **Received:** the shielded outputs the wallet's keys decrypt. Each offer is
+  applied to an empty local state with the ledger's own `ZswapLocalState`,
+  which keeps exactly what decrypts to the wallet's keys, the test its sync
+  applies; an output spent again in the same transaction (a transient) counts
+  as spent too.
+- The change of each token is the net of both. The details list the shielded
+  inputs and outputs with how many are the wallet's.
+
+The limit is the sync's: an output to the wallet's coin key that carries no
+ciphertext for it is not seen, and the wallet's sync would not see it either.
+
 ## Permission model
 
 | Tier | Methods |
 | --- | --- |
 | Free once connected | `getConfiguration`, `getConnectionStatus`, `hintUsage`, `getShieldedAddresses`, `getUnshieldedAddress`, `getDustAddress`, `getUnshieldedBalances`, `getProvingProvider`, `submitTransaction` |
+| A window when something changes | `watchToken` (beyond the API) |
 | A window every time | `balanceUnsealedTransaction`, `balanceSealedTransaction`, `makeTransfer`, `makeIntent`, `signData` |
 | A stored grant per site and network | `getShieldedBalances`, `getDustBalance`, `getTxHistory` |
 
@@ -188,14 +329,19 @@ Details:
 ## Approval windows
 
 Each request that needs you opens a separate 440 by 680 pixel window, with the
-site's origin and the network. Closing the window rejects.
+site's origin and the network. Closing the window rejects. The windows of a
+connect that switches network, of `addNetwork` and of `watchToken` ask for no
+password: they need nothing of the selected wallet's keys.
 
 | Window | Shows |
 | --- | --- |
 | Unlock | a password field, when the wallet is locked |
 | Connect | what the site will be able to do, on which network |
+| Switch network and connect | the network the site asks for (or the matching networks to choose from), that connecting switches mdwa to it from the selected one, and what the site will be able to do |
+| Add this network | a site's network definition in the **Add a network** form's fields, read-only, and its first block |
+| Name this token | a site's label for a token: kind, name, symbol, decimals, the token type, and the contract when given |
 | Allow these requests | each requested method in words, with its name |
-| Approve transaction | contract calls and deploys, the effect on this wallet (token changes and the DUST fee), and a collapsed breakdown (inputs, outputs, shielded counts, DUST spends); the site's raw transaction is behind Show |
+| Approve transaction | contract calls and deploys, the effect on this wallet (shielded and unshielded token changes and the DUST fee), and a collapsed breakdown (inputs, outputs, how many of each are the wallet's, DUST spends); the site's raw transaction is behind Show |
 | Send from this wallet | the outputs the site asked for, the effect and the fee |
 | Create swap offer | what you give and what you ask for, the effect and the fee |
 | Sign message | the message as text when printable, otherwise as hex, and its encoding |
@@ -288,12 +434,12 @@ Errors reach the page as `Error`s with `type: "DAppConnectorAPIError"` and a
 
 | Code | When |
 | --- | --- |
-| `Rejected` | you declined a window, or the wallet is locked and you did not unlock it |
+| `Rejected` | you declined a window (a connect, a switch, a network or a token name too), or the wallet is locked and you did not unlock it |
 | `PermissionRejected` | a gated method without a grant, or one you refused (sticky for the page's life) |
 | `Disconnected` | the connection ended: another network, a removed wallet, a disconnected site |
-| `InvalidRequest` | a malformed request, an unknown method, a wrong network id on `connect` |
+| `InvalidRequest` | a malformed request, an unknown method, `No network <networkId> in mdwa` on `connect`, a network definition or token label that fails its checks (with the reason) |
 | `InsufficientFunds` | the wallet cannot cover the request, including too little DUST for the fee |
-| `InternalError` | anything else, including no wallet on the network |
+| `InternalError` | anything else, including no wallet on the network and a switch while mdwa is busy |
 
 ## Limits
 
@@ -334,7 +480,7 @@ This builds the page with esbuild and serves it on `http://localhost:5190`,
 bound to `127.0.0.1` (`node dapp/serve.mjs --port 5191` changes the port). The
 compiled contract is served under `/managed`, the layout Midnight.js's
 `FetchZkConfigProvider` reads. The page's network id field starts at
-`undeployed`; change it to the network mdwa is on.
+`undeployed`; change it to the network to connect on (mdwa switches to it).
 
 ```bash
 npm run dapp:contract
@@ -344,7 +490,9 @@ compiles the counter with Compact 0.36.1 into `dapp/contract/managed` (about 75
 kB; the output is kept in the repository). It expects the `compact` tool and the
 public parameters in `~/.cache/midnight/zk-params`, or `MIDNIGHT_ZK_PARAMS`.
 
-The page's actions: connect, connect with a wrong network, the reads,
+The page's actions: connect (with an optional endpoint, switching network),
+connect to a network id mdwa does not have, `addNetwork` and `watchToken` with a JSON
+definition or token you edit on the page, the reads,
 `signData`, the three transfers (unshielded, without fees, shielded),
 `balanceSealedTransaction`, `submitTransaction`, `makeIntent` (and a refused
 segment), deploy, increment and read counter, and a transport test that pushes a

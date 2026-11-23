@@ -118,9 +118,13 @@ export function makeConnector(engine) {
 
   // ---------------------------------------------------------- describing ---
   /** What a recipe does, over all its parts: the dApp's transaction and what
-   *  the wallet added. Lists are joined, deltas and the fee are summed. */
-  function describeRecipe(recipe, s) {
-    const parts = midnight.recipeTransactions(recipe).map(tx => midnight.describeLedgerTransaction(tx, s));
+   *  the wallet added. Lists are joined, deltas and the fee are summed.
+   *  Shielded coins are this wallet's by its keys (midnight.shieldedEffect),
+   *  against `s`, the state the recipe was balanced from. */
+  function describeRecipe(recipe, s, wallet) {
+    const keys = midnight.shieldedKeysOf(wallet);
+    let parts;
+    try { parts = midnight.recipeTransactions(recipe).map(tx => midnight.describeLedgerTransaction(tx, s, keys)); } finally { keys.clear(); }
     const sumBy = (items, key) => {
       const totals = new Map();
       for (const d of items) {
@@ -138,7 +142,10 @@ export function makeConnector(engine) {
       deploys: parts.flatMap(p => p.deploys),
       maintenance: parts.flatMap(p => p.maintenance),
       unshielded: { inputs: parts.flatMap(p => p.unshielded.inputs), outputs: parts.flatMap(p => p.unshielded.outputs) },
-      shielded: { inputs: count('inputs'), outputs: count('outputs'), transients: count('transients') },
+      shielded: {
+        inputs: count('inputs'), outputs: count('outputs'), transients: count('transients'),
+        received: parts.reduce((a, p) => a + p.shielded.received, 0), spent: parts.reduce((a, p) => a + p.shielded.spent, 0),
+      },
       dust: { spends: parts.reduce((a, p) => a + p.dust.spends, 0), registrations: parts.reduce((a, p) => a + p.dust.registrations, 0) },
       imbalances: parts.flatMap(p => p.imbalances),
       deltas, fee: fee.toString(), estimatedFee: null,
@@ -155,7 +162,7 @@ export function makeConnector(engine) {
       let built;
       try { built = await build(wallet); } catch (error) { throw classify(error); }
       let described;
-      try { described = describeRecipe(built.recipe, s); } catch (error) {
+      try { described = describeRecipe(built.recipe, s, wallet); } catch (error) {
         await wallet.facade.revert(built.recipe, 'not describable').catch(() => {});
         throw error;
       }

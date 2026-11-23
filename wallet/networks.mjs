@@ -147,6 +147,26 @@ export function checkedEndpoints(n, entry) {
   return e;
 }
 
+/** Whether two URLs name the same endpoint: the same scheme, host, port and
+ *  path, a trailing slash aside (a query, such as a project id, is not part
+ *  of it). A string that is not a URL matches nothing. */
+export function sameEndpoint(a, b) {
+  const key = text => {
+    try {
+      const u = new URL(String(text).trim());
+      return `${u.protocol}//${u.host}${u.pathname.replace(/\/+$/, '')}`;
+    } catch { return null; }
+  };
+  const k = key(a);
+  return k !== null && k === key(b);
+}
+
+/** The networks of `list` (`{ networkId, node }`, `node` as a site sees it,
+ *  see publicEndpoints) a site's `connect(networkId, { endpoint })` names:
+ *  those with that network id, narrowed by `endpoint` when given. */
+export const networksMatching = (list, networkId, endpoint = null) => list.filter(n => n.networkId === networkId
+  && (endpoint === null || endpoint === undefined || sameEndpoint(n.node, endpoint)));
+
 /** What a dApp may see of the endpoints: the base URLs, never the project id.
  *  A network that takes transactions over HTTP reports its submit URL as the
  *  node, the one string the connector API has for where transactions go. */

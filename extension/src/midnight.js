@@ -906,7 +906,8 @@ export async function historyDetail(wallet, state, hashOrId, txMeta = {}) {
     const bytes = handle.serialize();
     raw = hex(bytes);
     size = bytes.length;
-    try { described = describeLedgerTransaction(ledgerTransaction(handle), state); } catch { described = null; }
+    const keys = shieldedKeysOf(wallet);
+    try { described = describeLedgerTransaction(ledgerTransaction(handle), state, keys); } catch { described = null; } finally { keys.clear(); }
   }
   return {
     ...item,
@@ -942,9 +943,53 @@ const entryPointName = e => {
   return /^[\x20-\x7e]+$/.test(text) ? text : hex(e);
 };
 
+/** This wallet's shielded coins it can spend or has booked, by nullifier,
+ *  from the SDK's state. */
+export function ownNullifiers(state) {
+  const coins = new Map();
+  if (!state?.shielded) return coins;
+  for (const c of state.shielded.availableCoins ?? []) coins.set(c.nullifier.toLowerCase(), c.coin);
+  for (const c of state.shielded.reservedCoins ?? []) coins.set(c.nullifier.toLowerCase(), c.coin);
+  return coins;
+}
+
+/**
+ * The shielded coins of this wallet a transaction receives and spends. A
+ * spend is an input whose nullifier is one of the wallet's coins (`own`, see
+ * ownNullifiers). A receipt is an output the wallet's keys decrypt: each
+ * offer is applied to an empty local state with the ledger's own
+ * ZswapLocalState, which keeps what decrypts to these keys, the same test the
+ * wallet's sync applies; an output spent again inside the transaction (a
+ * transient) comes back spent too. An output that carries no ciphertext for
+ * this wallet is not seen, here or by the wallet's sync. `keys` (ledger-v9
+ * ZswapSecretKeys) may be null: then only spends are found.
+ */
+export function shieldedEffect(tx, keys, own) {
+  const received = [], spent = [];
+  const offers = [tx.guaranteedOffer, ...(tx.fallibleOffer?.values() ?? [])].filter(Boolean);
+  for (const offer of offers) {
+    for (const input of offer.inputs) {
+      const coin = own.get(String(input.nullifier).toLowerCase());
+      if (coin) spent.push(coin);
+    }
+    if (!keys) continue;
+    for (const change of new ledger.ZswapLocalState().applyWithChanges(keys, offer).changes) {
+      received.push(...change.receivedCoins);
+      spent.push(...change.spentCoins);
+    }
+  }
+  const plain = c => ({ type: c.type, value: BigInt(c.value) });
+  return { received: received.map(plain), spent: spent.map(plain) };
+}
+
+/** The ledger-v9 shielded keys of a running wallet (midnight.openWallet), for
+ *  shieldedEffect; clear them after use. */
+export const shieldedKeysOf = wallet => ledger.ZswapSecretKeys.fromSeed(wallet.seeds.shielded);
+
 /** What a ledger transaction does, as far as the ledger API exposes it, and
- *  how it moves this wallet's unshielded tokens. */
-export function describeLedgerTransaction(tx, state) {
+ *  how it moves this wallet's tokens: unshielded ones by owner, shielded ones
+ *  by shieldedEffect when `keys` are given (and spends alone without). */
+export function describeLedgerTransaction(tx, state, keys = null) {
   // Ledger-v9 verifying keys are { tag, value } records: compare the values.
   const keyText = key => (key && typeof key === 'object' ? `${key.tag}:${key.value}` : String(key));
   const vk = state?.unshielded.verifyingKey;
@@ -971,15 +1016,20 @@ export function describeLedgerTransaction(tx, state) {
     dustRegistrations += intent.dustActions?.registrations?.length ?? 0;
   }
   const offers = [tx.guaranteedOffer, ...(tx.fallibleOffer?.values() ?? [])].filter(Boolean);
+  const mineShielded = state ? shieldedEffect(tx, keys, ownNullifiers(state)) : { received: [], spent: [] };
   const shielded = {
     inputs: sum(offers.map(o => BigInt(o.inputs.length))).toString(),
     outputs: sum(offers.map(o => BigInt(o.outputs.length))).toString(),
     transients: sum(offers.map(o => BigInt(o.transients.length))).toString(),
+    received: mineShielded.received.length, spent: mineShielded.spent.length,
   };
   const net = new Map();
-  for (const i of unshieldedInputs) if (i.mine) net.set(i.type, (net.get(i.type) ?? 0n) - BigInt(i.amount));
-  for (const o of unshieldedOutputs) if (o.mine) net.set(o.type, (net.get(o.type) ?? 0n) + BigInt(o.amount));
-  const deltas = [...net].filter(([, a]) => a !== 0n).map(([type, amount]) => ({ kind: 'unshielded', type, amount: amount.toString() }));
+  const add = (kind, type, amount) => net.set(`${kind}:${type}`, { kind, type, amount: (net.get(`${kind}:${type}`)?.amount ?? 0n) + amount });
+  for (const i of unshieldedInputs) if (i.mine) add('unshielded', i.type, -BigInt(i.amount));
+  for (const o of unshieldedOutputs) if (o.mine) add('unshielded', o.type, BigInt(o.amount));
+  for (const c of mineShielded.spent) add('shielded', c.type, -c.value);
+  for (const c of mineShielded.received) add('shielded', c.type, c.value);
+  const deltas = [...net.values()].filter(d => d.amount !== 0n).map(d => ({ ...d, amount: d.amount.toString() }));
   if (fee > 0n) deltas.push({ kind: 'dust', type: 'dust', amount: (-fee).toString() });
   const imbalances = [];
   for (const segment of [0, ...(tx.intents?.keys() ?? [])].filter((v, i, a) => a.indexOf(v) === i)) {
@@ -1007,7 +1057,9 @@ export async function describeTransaction(wallet, txHex, stage, state) {
   if (!sdkStage) throw new Error('stage is unsealed or sealed');
   if (typeof txHex !== 'string' || !/^([0-9a-fA-F]{2})+$/.test(txHex)) throw new Error('tx is a hex string');
   const handle = wallet.facade.adoptTransaction(unhex(txHex), sdkStage);
-  const described = describeLedgerTransaction(ledgerTransaction(handle), state);
+  const keys = shieldedKeysOf(wallet);
+  let described;
+  try { described = describeLedgerTransaction(ledgerTransaction(handle), state, keys); } finally { keys.clear(); }
   let estimatedFee = null;
   try { estimatedFee = (await wallet.facade.estimateTransactionFee(handle)).toString(); } catch { /* not balanceable as is */ }
   return { stage, ...described, estimatedFee, size: txHex.length / 2 };
