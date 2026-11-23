@@ -112,7 +112,9 @@ these four; see [Your own networks](#your-own-networks).
   `?project_id=` to the node and both indexer URLs when the connection is
   made, never stored inside a URL, and never given to a dApp: what dApps see
   (`getConfiguration`) are the base URLs. Without an id on Preprod or
-  Mainnet, the sync status says so and the wallet does not retry.
+  Mainnet while an endpoint is still on Blockfrost, the sync status says so
+  and the wallet does not retry; pointed at your own node and indexer, they
+  need no id.
 - **Units.** NIGHT has 6 decimals (smallest unit STAR) and DUST has 15
   (smallest unit SPECK). Other tokens have no decimals unless you label them.
 
