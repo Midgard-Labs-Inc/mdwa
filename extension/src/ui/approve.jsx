@@ -319,7 +319,7 @@ function Body({ request, networkLabel, state, labels }) {
           </LayerCard.Secondary>
           <LayerCard.Primary className="flex flex-col gap-2">
             <Payload data={params.data} encoding={params.encoding} />
-            <Text variant="secondary" size="xs">Signing proves you control this wallet. It does not move any funds.</Text>
+            <Text variant="secondary" size="xs">The site gets a signature by this wallet's key, which another program may accept as your consent, even to move funds. Sign only what you expect from this site.</Text>
           </LayerCard.Primary>
         </LayerCard>
       );
