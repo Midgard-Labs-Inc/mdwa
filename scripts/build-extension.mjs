@@ -22,6 +22,8 @@ const proverClient = path.join(modules, '@midnightntwrk/wallet-sdk-prover-client
 // Every build has its own id: pages compare it with the running background
 // (see extension/src/ui/fresh.js) and reload the extension after a rebuild.
 const buildId = new Date().toISOString();
+// The release package (scripts/release.mjs) ships without source maps.
+const sourcemap = process.env.MDWA_NO_SOURCEMAP ? false : 'linked';
 rmSync(out, { recursive: true, force: true });
 mkdirSync(path.join(out, 'wasm'), { recursive: true });
 
@@ -35,7 +37,7 @@ const common = {
   // The SDK reports errors by class and tag; keeping names keeps its messages
   // and any constructor-name checks in its dependencies intact.
   keepNames: true,
-  sourcemap: 'linked',
+  sourcemap,
   legalComments: 'linked',
   define: { 'process.env.NODE_ENV': '"production"', __BUILD_ID__: JSON.stringify(buildId), global: 'globalThis' },
   // The SDK (address codecs, polkadot) uses Node's Buffer and process.
@@ -88,7 +90,7 @@ for (const [file, output] of Object.entries(pages.metafile.outputs)) {
 const contentScripts = await build({
   entryPoints: { content: path.join(src, 'content.js'), inject: path.join(src, 'inject.js') },
   outdir: out, bundle: true, format: 'iife', platform: 'browser', target: 'chrome116', minify: true,
-  sourcemap: 'linked', legalComments: 'linked', logLevel: 'warning', metafile: true,
+  sourcemap, legalComments: 'linked', logLevel: 'warning', metafile: true,
 });
 for (const [file, output] of Object.entries(contentScripts.metafile.outputs)) {
   if (Object.keys(output.inputs).some(i => i.includes('node_modules'))) throw new Error(`${file} bundles a package; content scripts must stay small`);

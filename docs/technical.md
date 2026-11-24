@@ -657,6 +657,25 @@ npm run build:extension
 Open `chrome://extensions`, enable Developer mode, choose **Load unpacked** and
 select that folder.
 
+### A release package
+
+```bash
+npm run release
+```
+
+`npm run release` (`scripts/release.mjs`) refuses a working tree with
+uncommitted changes to tracked files (`-- --allow-dirty` packages one anyway,
+named `-dirty`) and a `package.json` whose version is not the manifest's. It
+builds the extension without source maps (`MDWA_NO_SOURCEMAP=1`), checks that
+the manifest's version is the release's, that every file the manifest and the
+pages name exists, and that no source map, dot file, test page or profile is in
+it, then writes `build/release/mdwa-<version>.zip` and its SHA-256 in
+`mdwa-<version>.zip.sha256` (for `shasum -a 256 -c`). The zip holds one folder,
+`mdwa-<version>/`: the minified bundles, the WASM, the pages, the stylesheet,
+the icon, `LICENSE`, and the third-party licences each bundle names
+(`*.LEGAL.txt`). The script prints the zip's path, size, SHA-256 and the commit
+it was built from.
+
 ### Try it in Helium
 
 ```bash
@@ -795,6 +814,6 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
 | `extension/src/inject.js`, `content.js` | the page's connector object and its relay |
 | `extension/src/ui/` | popup and approval windows (React) |
 | `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, the page policy check, Blockfrost URL handling, units |
-| `scripts/` | extension build and its esbuild plugins, Helium launcher, the smoke, browser, connector, custom-network, birthday and rewind checks |
+| `scripts/` | extension build and its esbuild plugins, release package, Helium launcher, the smoke, browser, connector, custom-network, birthday and rewind checks |
 | `dapp/` | the local test dApp: `index.html`, `app.js`, `serve.mjs`, `compile.mjs`, `contract/counter.compact` |
 | `docs/` | this documentation and its screenshots |

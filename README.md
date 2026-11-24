@@ -28,7 +28,40 @@ a local network and networks you add, with one recovery phrase for all of them.
 - Local names for custom tokens, checked against the minting contract.
 - Unlock once per browser session.
 
-## Quick start
+## Install
+
+mdwa is unaudited and comes with no warranty (see [LICENSE](LICENSE)): use
+test networks, or amounts you can afford to lose.
+
+1. Download `mdwa-<version>.zip` from the repository's
+   [Releases](../../releases) page. Optionally, download
+   `mdwa-<version>.zip.sha256` beside it and check the zip against the
+   published SHA-256 (it prints `OK`; on Linux, `sha256sum -c` does the same):
+
+   ```bash
+   shasum -a 256 -c mdwa-<version>.zip.sha256
+   ```
+
+2. Unzip it somewhere it can stay. The browser loads the extension from that
+   folder: moving or deleting it removes the wallet from the browser.
+3. Open `chrome://extensions`, turn on **Developer mode**, choose
+   **Load unpacked** and pick the `mdwa-<version>` folder. Pin mdwa from the
+   extensions menu (the puzzle piece) to open it from the toolbar.
+
+It runs in Chrome and Chromium-based browsers, version 116 or newer.
+
+**Updating.** A release does not update itself. Unzip the new version over the
+same folder (or replace the folder's contents with it), then press the reload
+arrow on mdwa's card in `chrome://extensions` and unlock with your password.
+The extension's id comes from the folder's path, so it keeps its id and with it
+the wallet's data. Loaded from a different folder, it is another extension,
+with a new, empty wallet.
+
+**Back up your recovery phrase.** Removing the extension deletes the wallet's
+data from the browser, and the wallet cannot show the phrase again. Your funds
+stay on chain; the phrase restores them.
+
+## Build from source
 
 ```bash
 npm ci
