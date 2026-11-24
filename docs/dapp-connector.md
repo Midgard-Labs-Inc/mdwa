@@ -271,7 +271,7 @@ Every method of `ConnectedAPI`:
 
 | Method | Behavior |
 | --- | --- |
-| `getConfiguration()` | the indexer HTTP and WebSocket URLs, the node URL and the network id, as configured for the selected network, never with a Blockfrost project id. `proverServerUri` is added, as the API's deprecated field, only while you prove with a proof server |
+| `getConfiguration()` | the indexer HTTP and WebSocket URLs, the node URL and the network id, as configured for the selected network, never with a Blockfrost project id. `proverServerUri` is added, as the API's deprecated field, only while you prove with a proof server. On Mainnet before you set its node and indexer, it fails with `InternalError` |
 | `getConnectionStatus()` | `connected` with the network id, or `disconnected` |
 | `hintUsage(methodNames)` | asks for the grants of the gated methods named, in one window; returns nothing. Unknown names are `InvalidRequest` |
 | `getShieldedAddresses()` | the shielded address, coin public key and encryption public key, Bech32m |

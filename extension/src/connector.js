@@ -20,7 +20,7 @@
 // On a network without DUST nothing pays a fee, whatever a site asks.
 import { firstValueFrom, filter, timeout } from 'rxjs';
 import { ShieldedCoinPublicKey, ShieldedEncryptionPublicKey, isInsufficientDustForFeeError } from '@midnightntwrk/wallet-sdk';
-import { publicEndpoints } from '../../wallet/networks.mjs';
+import { connectionProblem, hasEndpoints, publicEndpoints } from '../../wallet/networks.mjs';
 import * as midnight from './midnight.js';
 
 const TTL_MS = 60 * 60 * 1000;
@@ -282,7 +282,10 @@ export function makeConnector(engine) {
   return {
     getConfiguration: async () => {
       const n = context();
-      const e = publicEndpoints(n, await endpointsFor(n.network));
+      const stored = await endpointsFor(n.network);
+      const e = publicEndpoints(n, stored);
+      // A network without a default, before the user sets its node and indexer.
+      if (!hasEndpoints(e)) throw fail('InternalError', connectionProblem(n, stored));
       return {
         indexerUri: e.indexerHttp, indexerWsUri: e.indexerWs, substrateNodeUri: e.node, networkId: n.networkId,
         // Deprecated in the API, but some dApps still read it: reported while

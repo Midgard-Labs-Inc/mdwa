@@ -1,17 +1,18 @@
 // Settings: the connection to the network, proving, locking, rescanning (from
 // the birthday, a date or the start of the chain) and removing the wallet.
-// Every network keeps its own connection values. A network the user added
-// shows its definition instead of the connection fields: its endpoints are
-// edited, and the network removed, in its form (networks.jsx). Before a
-// wallet exists, the welcome screen shows the connection and proving only, so
-// a wallet is created through them.
+// Every network keeps its own connection values: a built-in network connects
+// through its default provider or through the user's own node and indexer
+// (Mainnet has no default). A network the user added shows its definition
+// instead: its endpoints are edited, and the network removed, in its form
+// (networks.jsx). Before a wallet exists, the welcome screen shows the
+// connection and proving only, so a wallet is created through them.
 import { useEffect, useState } from 'react';
 import { CheckCircleIcon, LockKeyIcon, TrashIcon } from '@phosphor-icons/react';
 import { Dialog } from '@cloudflare/kumo/components/dialog';
 import { Loader } from '@cloudflare/kumo/components/loader';
 import { useKumoToastManager } from '@cloudflare/kumo/components/toast';
-import { AddRow, DateField, DetailRow, ListCard, PasswordField, PrimaryButton, SecondaryButton, Section, TextField, Viewport } from './components.jsx';
-import { DEFAULT_PROOF_SERVER, NETWORKS } from '../../../wallet/networks.mjs';
+import { AddRow, DateField, DetailRow, ListCard, PasswordField, PrimaryButton, SecondaryButton, Section, Segmented, TextField, Viewport } from './components.jsx';
+import { DEFAULT_PROOF_SERVER, needsProjectId, sameEndpoint } from '../../../wallet/networks.mjs';
 import { entryFor, withEntry } from './endpoints.js';
 import { ui } from './api.js';
 import { dateTime, localDay, networkName, shortHash, withCommas } from './format.js';
@@ -67,6 +68,71 @@ function RemoveDialog({ title }) {
   );
 }
 
+const ADDRESSES = [['node', 'Node RPC', 'wss://…'], ['indexerHttp', 'Indexer HTTP', 'https://…/api/v4/graphql'], ['indexerWs', 'Indexer WebSocket', 'wss://…/api/v4/graphql/ws']];
+const addressesOf = entry => Object.fromEntries(ADDRESSES.map(([key]) => [key, entry[key] ?? '']));
+const capitalized = text => text[0].toUpperCase() + text.slice(1);
+
+/** Confirms a change of a wallet's indexer, which discards what it synced. */
+function IndexerDialog({ name, onConfirm, onClose }) {
+  return (
+    <Dialog.Root open onOpenChange={open => { if (!open) onClose(); }}>
+      <Dialog size="sm" className="p-6">
+        <div className="flex flex-col gap-4">
+          <Dialog.Title className="text-base font-semibold text-kumo-default">Change the indexer?</Dialog.Title>
+          <Dialog.Description className="text-[13px] leading-normal text-kumo-subtle">
+            What the wallet synced on {name} through the current indexer is discarded, and {name} syncs again through the new one. Funds stay on chain.
+          </Dialog.Description>
+          <div className="flex gap-2">
+            <Dialog.Close render={p => <SecondaryButton {...p} type="button">Cancel</SecondaryButton>} />
+            <PrimaryButton className="flex-1" onClick={onConfirm}>Change indexer</PrimaryButton>
+          </div>
+        </div>
+      </Dialog>
+    </Dialog.Root>
+  );
+}
+
+/**
+ * A built-in network's connection: its default provider, shown read-only, or
+ * the user's own node and indexer, all three required. The choice starts as
+ * stored: addresses other than the defaults are the user's own. A Blockfrost
+ * project id is asked for while an address in use is on Blockfrost.
+ */
+function Connection({ state, name, definition, stored, defaults, onSave }) {
+  const own = !definition.provider || !ADDRESSES.every(([key]) => sameEndpoint(stored[key], defaults[key]));
+  const [via, setVia] = useState(own ? 'own' : 'default');
+  const [typed, setTyped] = useState(own ? addressesOf(stored) : addressesOf({}));
+  const [projectId, setProjectId] = useState(stored.projectId ?? '');
+  const [confirming, setConfirming] = useState(null);
+  const addresses = via === 'own' ? typed : addressesOf(defaults);
+  const choices = [
+    ...(definition.provider ? [{ value: 'default', label: capitalized(definition.provider) }] : []),
+    { value: 'own', label: 'Your own node and indexer' },
+  ];
+  const ready = Object.values(addresses).every(url => url.trim());
+  const next = { ...stored, ...Object.fromEntries(Object.entries(addresses).map(([key, url]) => [key, url.trim()])), projectId };
+  // A wallet's synced state belongs to the indexer it came from (the engine
+  // discards it when the indexer changes).
+  const save = () => (state.hasWallet && stored.indexerHttp && next.indexerHttp !== stored.indexerHttp ? setConfirming(next) : onSave(next));
+  return (
+    <Section title="Connection" gap="gap-3">
+      <Segmented label={`Where ${name} connects`} options={choices} value={via} onChange={setVia} />
+      {via === 'own'
+        ? ADDRESSES.map(([key, label, placeholder]) => (
+          <TextField key={key} label={label} mono value={typed[key]} placeholder={placeholder} spellCheck={false}
+            onChange={e => setTyped(t => ({ ...t, [key]: e.target.value }))} />
+        ))
+        : <ListCard>{ADDRESSES.map(([key, label]) => <DetailRow key={key} label={label} mono>{defaults[key]}</DetailRow>)}</ListCard>}
+      {needsProjectId(addresses) && (
+        <PasswordField label="Blockfrost project id" mono autoComplete="off" value={projectId} onChange={e => setProjectId(e.target.value)}
+          description="From your Blockfrost account. It stays on this device, goes only to Blockfrost, and is never shown to sites." />
+      )}
+      <SecondaryButton className="w-full" disabled={!ready} onClick={save}>Save connection</SecondaryButton>
+      {confirming && <IndexerDialog name={name} onClose={() => setConfirming(null)} onConfirm={() => { onSave(confirming); setConfirming(null); }} />}
+    </Section>
+  );
+}
+
 /** A user network's definition, with Edit opening its form. */
 function UserNetwork({ definition, onEdit }) {
   return (
@@ -87,30 +153,22 @@ function UserNetwork({ definition, onEdit }) {
 export function Settings({ state, onForm }) {
   const toasts = useKumoToastManager();
   const [settings, setSettings] = useState(null);
-  const [values, setValues] = useState(null);
+  const [prover, setProver] = useState(null);
   const name = networkName(state);
   useEffect(() => {
-    setSettings(null); setValues(null);
-    ui('settings').then(s => { setSettings(s); setValues(entryFor(s.endpoints, state.network)); });
+    setSettings(null); setProver(null);
+    ui('settings').then(s => { setSettings(s); setProver(entryFor(s.endpoints, state.network).prover); });
   }, [state.network]);
-  const defaults = entryFor(settings?.defaults, state.network);
-  const blockfrost = !!NETWORKS[state.network]?.blockfrost;
-  const set = patch => setValues(v => ({ ...v, ...patch }));
-  const prover = values?.prover ?? { kind: 'wasm', url: DEFAULT_PROOF_SERVER };
+  const stored = entryFor(settings?.endpoints, state.network);
 
-  const save = async (next, title) => {
+  // Each section saves its own part over what is stored.
+  const save = async next => {
     try {
       await ui('saveSettings', { network: state.network, endpoints: withEntry(settings.endpoints, state.network, next) });
-      setSettings(s => ({ ...s, endpoints: withEntry(s.endpoints, state.network, next) }));
-      toasts.add({ title, description: state.hasWallet ? 'Reconnecting with the new settings.' : 'A wallet you create or restore here uses them.', variant: 'success' });
+      const s = await ui('settings');
+      setSettings(s);
+      toasts.add({ title: 'Saved', description: state.hasWallet ? 'Reconnecting with the new settings.' : 'A wallet you create or restore here uses them.', variant: 'success' });
     } catch (e) { toasts.add({ title: 'Could not save', description: e.message, variant: 'error' }); }
-  };
-  // The project id is the user's credential for the hosted endpoints, not an
-  // endpoint: resetting the endpoints leaves it alone.
-  const reset = () => {
-    const next = { ...values, node: defaults.node, indexerHttp: defaults.indexerHttp, indexerWs: defaults.indexerWs };
-    setValues(next);
-    save(next, 'Defaults restored');
   };
   const lock = () => ui('lock').catch(e => toasts.add({ title: 'Could not lock', description: e.message, variant: 'error' }));
   const [rescanDate, setRescanDate] = useState('');
@@ -131,33 +189,19 @@ export function Settings({ state, onForm }) {
   return (
     <Viewport gap="gap-5">
       {state.hasWallet && <h2 className="px-1 text-lg font-bold text-kumo-default">Settings</h2>}
-      {settings?.definition.user ? <UserNetwork definition={settings.definition} onEdit={() => onForm('edit')} /> : (
-        <Section title="Connection" gap="gap-3">
-          {!values ? <Loader /> : (
-            <>
-              <TextField label="Node RPC" mono value={values.node ?? ''} onChange={e => set({ node: e.target.value })} spellCheck={false} />
-              <TextField label="Indexer HTTP" mono value={values.indexerHttp ?? ''} onChange={e => set({ indexerHttp: e.target.value })} spellCheck={false} />
-              <TextField label="Indexer WebSocket" mono value={values.indexerWs ?? ''} onChange={e => set({ indexerWs: e.target.value })} spellCheck={false} />
-              {blockfrost && (
-                <PasswordField label="Blockfrost project id" mono autoComplete="off" value={values.projectId ?? ''}
-                  onChange={e => set({ projectId: e.target.value })}
-                  description="Preprod and Mainnet are served through Blockfrost. The project id stays on this device and is never shown to sites." />
-              )}
-              <SecondaryButton className="w-full" onClick={() => save(values, 'Saved')}>Save connection</SecondaryButton>
-              <SecondaryButton className="w-full" onClick={reset}>Reset to defaults</SecondaryButton>
-            </>
-          )}
-        </Section>
-      )}
+      {!settings ? <Section title="Connection"><Loader /></Section>
+        : settings.definition.user ? <UserNetwork definition={settings.definition} onEdit={() => onForm('edit')} />
+          : <Connection key={JSON.stringify(stored)} state={state} name={name} definition={settings.definition} stored={stored}
+            defaults={entryFor(settings.defaults, state.network)} onSave={save} />}
       <Section title="Proving" gap="gap-3">
-        {!values ? <Loader /> : (
+        {!prover ? <Loader /> : (
           <>
-            <ProverChoice value={prover.kind} onChange={kind => set({ prover: { ...prover, kind, url: prover.url || DEFAULT_PROOF_SERVER } })} />
+            <ProverChoice value={prover.kind} onChange={kind => setProver(p => ({ ...p, kind, url: p.url || DEFAULT_PROOF_SERVER }))} />
             {prover.kind === 'server' && (
               <TextField label="Proof server URL" mono value={prover.url ?? ''} placeholder={DEFAULT_PROOF_SERVER}
-                onChange={e => set({ prover: { ...prover, url: e.target.value } })} spellCheck={false} />
+                onChange={e => setProver(p => ({ ...p, url: e.target.value }))} spellCheck={false} />
             )}
-            <SecondaryButton className="w-full" onClick={() => save(values, 'Saved')}>Save proving</SecondaryButton>
+            <SecondaryButton className="w-full" onClick={() => save({ ...stored, prover })}>Save proving</SecondaryButton>
           </>
         )}
       </Section>

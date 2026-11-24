@@ -121,7 +121,7 @@ for (const file of ['popup.html', 'approve.html', 'offscreen.html', 'icon.png'])
 const manifest = JSON.parse(readFileSync(path.join(root, 'extension/manifest.json'), 'utf8'));
 const origins = new Set();
 for (const n of Object.values(NETWORKS)) {
-  for (const url of [n.node, n.indexerHttp, n.indexerWs]) {
+  for (const url of [n.node, n.indexerHttp, n.indexerWs].filter(Boolean)) {
     const u = new URL(url);
     if (u.hostname !== 'localhost') origins.add(`${u.protocol}//${u.host}`);
   }

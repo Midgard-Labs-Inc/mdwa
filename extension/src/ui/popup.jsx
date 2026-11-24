@@ -121,8 +121,15 @@ function EngineError({ message }) {
 }
 
 // --------------------------------------------------------------- onboarding --
+/** Where network `n` (state.networks') connects, as the welcome screen says it. */
+const connectsText = n => {
+  if (n.user) return `Reads ${n.name} through an indexer, and sends to a node or a submit URL, all changeable in Settings.`;
+  if (!n.provider) return `${n.name} has no default node and indexer: set your own in Connection settings.`;
+  return `By default ${n.name} connects through ${n.provider}. Connection settings can point it at your own node and indexer.`;
+};
+
 const FEATURES = [
-  { icon: CubeIcon, title: 'Uses endpoints you choose', body: name => `Reads ${name} through an indexer, and sends to a node or a submit URL, all changeable in Settings.` },
+  { icon: CubeIcon, title: 'Uses endpoints you choose', body: connectsText },
   { icon: LockKeyIcon, title: 'Keys stay on this device', body: () => 'Your key is encrypted with your password and never leaves this browser.' },
   { icon: GlobeHemisphereWestIcon, title: 'One wallet, every network', body: () => 'Your recovery phrase opens on every network, built in or added, each with its own addresses.' },
 ];
@@ -145,7 +152,7 @@ function Welcome({ state, name, onPick, onForm }) {
               </span>
               <span className="flex flex-col gap-0.5">
                 <span className="text-[13px] font-semibold text-kumo-default">{title}</span>
-                <span className="text-xs leading-[1.45] text-kumo-subtle">{body(name)}</span>
+                <span className="text-xs leading-[1.45] text-kumo-subtle">{body(currentNetwork(state))}</span>
               </span>
             </li>
           ))}

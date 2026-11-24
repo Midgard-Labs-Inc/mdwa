@@ -248,7 +248,7 @@ export function Segmented({ options, value, onChange, label }) {
     <div role="radiogroup" aria-label={label} className="flex gap-1 rounded-full border border-kumo-line bg-kumo-tint p-1">
       {options.map(o => (
         <button key={o.value} type="button" role="radio" aria-checked={o.value === value} onClick={() => onChange(o.value)}
-          className={cx('h-7 flex-1 rounded-full text-xs font-medium outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus/50',
+          className={cx('min-h-7 flex-1 rounded-full px-2 py-1 text-xs leading-tight font-medium outline-none focus-visible:ring-2 focus-visible:ring-kumo-focus/50',
             o.value === value ? 'border border-kumo-line bg-kumo-base font-semibold text-kumo-default' : 'border border-transparent text-kumo-subtle hover:text-kumo-default')}>
           {o.label}
         </button>

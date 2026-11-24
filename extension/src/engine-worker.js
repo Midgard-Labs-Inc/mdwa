@@ -18,8 +18,8 @@
 // needs the keys to read the chain), and its snapshot stays encrypted.
 import { firstValueFrom, filter, timeout } from 'rxjs';
 import {
-  DEFAULT_NETWORK, checkedEndpoints, connectionUrls, defaultEndpoints, endpointsOf, network, networkIds, publicEndpoints, sameEndpoint,
-  userNetworkKey,
+  DEFAULT_NETWORK, checkedEndpoints, connectionProblem, connectionUrls, defaultEndpoints, endpointsOf, network, networkIds, publicEndpoints,
+  sameEndpoint, userNetworkKey,
 } from '../../wallet/networks.mjs';
 import * as db from './db.js';
 import * as vault from './vault.js';
@@ -125,7 +125,7 @@ async function reflect() {
     const n = network(id, userNetworks);
     const ownWallet = id === here.network ? own : isOwn(await db.forNetwork(id).get('wallet'));
     return {
-      id, name: n.name, networkId: n.networkId, user: n.user, dust: n.dust, ownWallet, hasWallet: ownWallet || state.sharedWallet,
+      id, name: n.name, networkId: n.networkId, user: n.user, dust: n.dust, provider: n.provider ?? null, ownWallet, hasWallet: ownWallet || state.sharedWallet,
     };
   }));
 }
@@ -169,7 +169,7 @@ async function startSession() {
   publish();
   try {
     const endpoints = await endpointsFor(n.id);
-    const urls = connectionUrls(n, endpoints);   // throws the Blockfrost project id message
+    const urls = connectionUrls(n, endpoints);   // throws when no node and indexer are set, or no project id
     // The chain tip, read from the indexer from the start: the SDK keeps
     // trying an endpoint it cannot reach without saying so, so this is also
     // how the user learns that the indexer does not answer.
@@ -301,9 +301,9 @@ function sessionFailed(run, error) {
   session = null;
   state.sync = { ...state.sync, status: 'error', error: String(error?.message ?? error) };
   publish();
-  // A missing Blockfrost project id, or a query the indexer does not offer,
-  // does not fix itself by retrying.
-  if (error?.permanent || /Blockfrost project id/.test(state.sync.error)) return;
+  // Missing endpoints or project id, or a query the indexer does not offer,
+  // do not fix themselves by retrying.
+  if (error?.permanent) return;
   retryTimer = setTimeout(startSession, retryDelay);
   retryDelay = Math.min(retryDelay * 2, 60000);
 }
@@ -476,18 +476,18 @@ async function withBusy(kind, stage, fn, { wait = false, ticket = null } = {}) {
  * it before. If the indexer cannot say where the tip is, it is born at the
  * start instead (correct, only slower) and `note` says why. A restored wallet
  * is born at `date` (YYYY-MM-DD) or, without one, at the start; a date the
- * indexer cannot place is refused, since the user asked for it. Networks the
- * wallet opens on later are placed by openShared.
+ * indexer cannot place is refused, since the user asked for it. Null when
+ * the network cannot be connected to yet (connectionProblem): the wallet is
+ * then placed at its first session there, by openShared, as on the networks
+ * it opens on later.
  */
 async function birthdayFor(restore, date) {
   if (restore && !date) return { birthday: null, note: null };
   if (!restore && date) throw new Error('A wallet birthday is for restoring a wallet');
   if (date) birthdays.birthdayInstant(date);   // a malformed or future date, before any network
-  let indexerHttp;
-  try { indexerHttp = connectionUrls(net(), await endpointsFor(store.network)).indexerHttp; } catch (error) {
-    if (restore) throw error;
-    return { birthday: null, note: `The chain tip could not be read (${error.message}), so the wallet scans from the start of the chain` };
-  }
+  const endpoints = await endpointsFor(store.network);
+  if (connectionProblem(net(), endpoints)) return null;
+  const { indexerHttp } = connectionUrls(net(), endpoints);
   try {
     return { birthday: await birthdays.birthdayBlock(indexerHttp, restore ? birthdays.birthdayInstant(date) : null), note: null };
   } catch (error) {
@@ -498,9 +498,11 @@ async function birthdayFor(restore, date) {
 
 /**
  * Creates or restores the shared wallet, which every network without a
- * wallet of its own then uses. It is opened on the selected network at once;
- * the seed's record says when it was created and, for a restore, the date
- * given, so that openShared can place its birthday on the other networks.
+ * wallet of its own then uses. It is opened on the selected network at once
+ * (where that network cannot be connected to yet, its record waits for the
+ * first session, see birthdayFor); the seed's record says when it was
+ * created and, for a restore, the date given, so that openShared can place
+ * its birthday on the other networks.
  */
 async function createWallet({ mnemonic, password, restore = false, birthday: date = null }) {
   if (isOwn(await store.get('wallet')) || await db.getSeed()) throw new Error(`A wallet already exists on ${net().name}`);
@@ -508,13 +510,14 @@ async function createWallet({ mnemonic, password, restore = false, birthday: dat
   const createdAt = Date.now();
   const seed = await midnight.seedFromMnemonic(mnemonic);
   const seedHex = vault.toHex(seed);
-  const addresses = midnight.deriveAddresses(seed, net());
-  const { birthday, note } = await birthdayFor(!!restore, date || null);
+  const born = await birthdayFor(!!restore, date || null);
   const sealed = await vault.seal(seedHex, password);
   await db.putSeed({ sealed, createdAt, restored: !!restore, date: (restore && date) || null });
-  await store.put('wallet', {
-    network: store.network, shared: true, addresses, createdAt, birthday, ...(note ? { birthdayNote: note } : {}),
-  });
+  if (born) {
+    await store.put('wallet', {
+      network: store.network, shared: true, addresses: midnight.deriveAddresses(seed, net()), createdAt, birthday: born.birthday, ...(born.note ? { birthdayNote: born.note } : {}),
+    });
+  }
   await store.delete('snapshot');
   await store.delete('txmeta');
   sharedSeedHex = seedHex;
@@ -529,9 +532,9 @@ async function createWallet({ mnemonic, password, restore = false, birthday: dat
  * time: its addresses and its birthday there. Whenever a date is stored with
  * the seed (the date a restore gave, or the latest rescan from a date), the
  * wallet is born at that date, whether its phrase was restored or created.
- * Without one, a phrase created on another network is born at the last block
- * at or before its creation (funds may have reached this network's address
- * since), and a restored one at the start. A time the indexer cannot place is
+ * Without one, a created phrase is born at the last block at or before its
+ * creation (on another network, funds may have reached this network's
+ * address since), and a restored one at the start. A time the indexer cannot place is
  * refused, as a restore's date is: the session fails, says why, and tries
  * again.
  */
@@ -641,7 +644,9 @@ async function resetWallet({ password }) {
  */
 async function rescan({ fromStart = false, date = null } = {}) {
   await live().catch(error => { if (error.locked || !state.hasWallet) throw error; });
-  const placed = date ? (await birthdayFor(true, date)).birthday : null;
+  const born = date ? await birthdayFor(true, date) : { birthday: null };
+  if (!born) throw new Error(connectionProblem(net(), await endpointsFor(store.network)));
+  const placed = born.birthday;
   await stopSession({ save: false });
   // A network the shared wallet has not opened on yet has no record:
   // openShared places it by the date stored with the seed below.

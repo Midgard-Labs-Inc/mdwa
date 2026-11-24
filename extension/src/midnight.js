@@ -93,8 +93,8 @@ export function deriveAddresses(seed, net) {
 }
 
 // ---------------------------------------------------------------- facade ---
-/** The SDK configuration of network `net`. connectionUrls throws the
- *  Blockfrost message when a project id is needed and missing. */
+/** The SDK configuration of network `net`. connectionUrls throws when the
+ *  network cannot be connected to (no node and indexer, or no project id). */
 export function sdkConfiguration(net, endpoints, txHistoryStorage) {
   const urls = connectionUrls(net, endpoints);
   return {

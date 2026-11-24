@@ -6,7 +6,8 @@
 //   node scripts/custom-check.mjs
 //
 // Covered: definitions (a node or a submit URL, with or without DUST), their
-// validation and the page policy check; the chain-identity check; the start-up capability check
+// validation and the page policy check; when a built-in network can connect
+// and where its Blockfrost project id goes; the chain-identity check; the start-up capability check
 // per DUST switch; the HTTP submission outcomes as the facade classifies them;
 // the stand-in DUST wallet against the SDK's interface and the facade's
 // "synced".
@@ -17,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 import { FacadeState, MidnightBech32m, ProtocolVersion, UnshieldedAddress, WalletSeeds } from '@midnightntwrk/wallet-sdk';
 import { classifySubmissionFailure } from '@midnightntwrk/wallet-sdk/capabilities/submission';
 import * as ledger from '@midnightntwrk/ledger-v9';
-import { connectionUrls, network, policyBlocks, publicEndpoints } from '../wallet/networks.mjs';
+import { checkedEndpoints, connectionUrls, network, policyBlocks, publicEndpoints } from '../wallet/networks.mjs';
 import * as custom from '../extension/src/custom.js';
 import { missingQueries } from '../extension/src/birthday.js';
 import { syncOf } from '../extension/src/midnight.js';
@@ -62,6 +63,17 @@ await ok('a user network with a submit URL has no node, and reports the submit U
   assert.equal(urls.submitUrl, `${base}/submit`);
   assert.equal('node' in urls, false);
   assert.equal(publicEndpoints(withSubmit, {}).node, `${base}/submit`);
+});
+await ok('a built-in network needs all three addresses, and a project id only where one is on Blockfrost, which alone gets it', () => {
+  const mainnet = network('mainnet'), preprod = network('preprod');
+  const own = { node: 'wss://node.example', indexerHttp: 'https://indexer.example/graphql', indexerWs: 'wss://indexer.example/graphql/ws' };
+  assert.throws(() => connectionUrls(mainnet, {}), e => e.permanent && /^Mainnet needs a node and an indexer/.test(e.message));
+  assert.equal(checkedEndpoints(mainnet, {}).node, undefined);
+  assert.throws(() => checkedEndpoints(mainnet, { node: own.node }), /indexerHttp is not a URL/);
+  assert.throws(() => connectionUrls(preprod, {}), e => e.permanent && /project id, or use your own node and indexer/.test(e.message));
+  assert.deepEqual(connectionUrls(preprod, { ...own, projectId: 'id' }), { ...own, prover: { kind: 'wasm', url: 'http://localhost:6300' } });
+  const mixed = connectionUrls(mainnet, { ...own, node: 'wss://rpc.midnight-mainnet.blockfrost.io', projectId: 'id' });
+  assert.deepEqual([mixed.node, mixed.indexerHttp], ['wss://rpc.midnight-mainnet.blockfrost.io/?project_id=id', own.indexerHttp]);
 });
 await ok('an unknown network key is refused, an inherited object property included', () => {
   assert.throws(() => network('nowhere', user), /Unknown network/);

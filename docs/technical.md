@@ -89,12 +89,13 @@ may not name another plain-HTTP host (see [Your own networks](#your-own-networks
 
 | Network | Id | Default services |
 | --- | --- | --- |
-| Preview | `preview` | `rpc.preview.midnight.network`, `indexer.preview.midnight.network` |
+| Preview | `preview` | Midnight's public node and indexer: `rpc.preview.midnight.network`, `indexer.preview.midnight.network` |
 | Preprod | `preprod` | Blockfrost (`midnight-preprod.blockfrost.io`), project id required |
-| Mainnet | `mainnet` | Blockfrost (`midnight-mainnet.blockfrost.io`), project id required |
+| Mainnet | `mainnet` | none: you set a node and an indexer |
 | Undeployed | `undeployed` | a local node at `ws://localhost:9944`, a local indexer at `http://localhost:8088` |
 
-Preview is the default network. The table is in
+Preview is the default network. Preprod's default is Blockfrost because
+Midnight's own public Preprod node and indexer were retired. The table is in
 [wallet/networks.mjs](../wallet/networks.mjs). Networks you define sit beside
 these four; see [Your own networks](#your-own-networks).
 
@@ -108,20 +109,27 @@ these four; see [Your own networks](#your-own-networks).
   where the site is approved, otherwise after you approve (see
   [Connecting](dapp-connector.md#connecting)). Wallets made per network by earlier versions are kept; see
   [Keys and unlocking](#keys-and-unlocking).
-- **Editable endpoints.** Settings has the node RPC, the indexer's HTTP and
-  WebSocket URLs, and, per network, the proving mode. Before a wallet exists,
-  the welcome screen's **Connection settings** opens the same fields, so a
-  wallet is created through your own node and indexer (its birthday is read
-  from the indexer then). The settings are stored once for all networks in
-  `mdwa-settings`. Changing a network's indexer URL discards its snapshot,
-  because a snapshot belongs to the indexer that produced it.
-- **Blockfrost.** The project id is entered in Settings. It is appended as
-  `?project_id=` to the node and both indexer URLs when the connection is
-  made, never stored inside a URL, and never given to a dApp: what dApps see
-  (`getConfiguration`) are the base URLs. Without an id on Preprod or
-  Mainnet while an endpoint is still on Blockfrost, the sync status says so
-  and the wallet does not retry; pointed at your own node and indexer, they
-  need no id.
+- **Your own node and indexer.** Settings' **Connection** chooses, per
+  network, between its default services (shown, not editable) and your own
+  node RPC and indexer HTTP and WebSocket URLs, all three required. A network
+  whose stored addresses differ from its defaults shows the second. Mainnet
+  has only the second: until all three are set, the wallet does not connect,
+  the sync status says that Mainnet needs a node and an indexer and the
+  wallet does not retry, and a dApp's `getConfiguration` fails. Before a
+  wallet exists, the welcome screen's **Connection settings** opens the same
+  choice, so a wallet is created through your own node and indexer (its
+  birthday is read from the indexer then; on a network that cannot connect
+  yet, at its first sync, from the time the wallet was created). The settings
+  are stored once for all networks in `mdwa-settings`, with each network's
+  proving mode. Changing a network's indexer URL discards its snapshot,
+  because a snapshot belongs to the indexer that produced it; Settings asks
+  first when the network has a wallet.
+- **Blockfrost.** A project id is asked for whenever an address in use is on
+  `blockfrost.io`, on any network. It is appended as `?project_id=` to those
+  addresses only, when the connection is made, never stored inside a URL, and
+  never given to a dApp: what dApps see (`getConfiguration`) are the base
+  URLs. Without one, the sync status says to add a project id or use your own
+  node and indexer, and the wallet does not retry.
 - **Units.** NIGHT has 6 decimals (smallest unit STAR) and DUST has 15
   (smallest unit SPECK). Other tokens have no decimals unless you label them.
 
@@ -666,7 +674,7 @@ its arguments.
 
 | Command | Does |
 | --- | --- |
-| `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
+| `npm run check:custom` | the code for your own networks under Node against an in-process stub indexer and submit endpoint, without network: definitions and their validation, the page policy check, when a built-in network can connect and where a project id goes, the chain-identity check, the start-up check per DUST switch, the HTTP submission answers as the facade classifies them, the stand-in DUST wallet against the SDK's interface and "synced" |
 | `npm run check:birthday` | where a wallet birthday lands, under Node against an in-process stub indexer: a new wallet at the tip, a creation time or a restore's date at the last block at or before it, the start and the tip at either end, the stored date first on the shared wallet's later networks |
 | `npm run check:requests` | what a page may ask beyond the connector API, under Node without network: which networks a connect names by network id and endpoint, the label rules applied to a page's token label, and the shielded coins of the wallet a transaction spends and receives, on a transaction built with the ledger |
 | `npm run check:rewind` | an indexer's `CHAIN_REWOUND`, under Node against an in-process stub of its GraphQL WebSocket: the SDK's unshielded sync, wrapped as the wallet wraps it, stops quietly and tells the engine once; any other error still fails it for the SDK's retry |
@@ -713,14 +721,13 @@ The test dApp is described in [dApp connector](dapp-connector.md#the-local-test-
   9 as of November 2026, so there is none to cross. A wallet with many past
   DUST spends pays for them on its first pass (see
   [What each wallet downloads](#what-each-wallet-downloads)).
-- **Mainnet and Preprod sync are untested.** Only Preview and a local network
-  (Undeployed) were tested. Blockfrost's
-  documentation lists the DUST queries the sync uses as Beta, and whether it
-  offers `zswapMerkleTreeCollapsedUpdate` is unknown. If it says it lacks one of
-  the sync's queries, Chain sync names it instead of syncing without end; a
-  missing collapsed update makes the shielded wallet scan from the start of the
-  chain. The Blockfrost endpoints in the table are defaults and may need
-  editing.
+- **Mainnet and Blockfrost sync are untested.** Preview, Preprod through a
+  Midnight node and indexer, and a local network (Undeployed) were tested.
+  Blockfrost's documentation lists the DUST queries the sync uses as Beta,
+  and whether it offers `zswapMerkleTreeCollapsedUpdate` is unknown. If an
+  indexer says it lacks one of the sync's queries, Chain sync names it instead
+  of syncing without end; a missing collapsed update makes the shielded wallet
+  scan from the start of the chain.
 - **One account per wallet.** One seed gives one set of three addresses; there is
   no account switcher and no address rotation.
 - **Not implemented:** hardware wallets; sending DUST. The connector's limits
@@ -745,7 +752,7 @@ The test dApp is described in [dApp connector](dapp-connector.md#the-local-test-
 | `extension/src/db.js` | IndexedDB per network, the sealed seed, and settings |
 | `extension/src/inject.js`, `content.js` | the page's connector object and its relay |
 | `extension/src/ui/` | popup and approval windows (React) |
-| `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, the page policy check, Blockfrost URL handling, units |
+| `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, when a network can connect, the page policy check, Blockfrost URL handling, units |
 | `scripts/` | extension build and its esbuild plugins, release package, Helium launcher, the smoke, browser, connector, custom-network, birthday, rewind and requests checks |
 | `dapp/` | the local test dApp: `index.html`, `app.js`, `serve.mjs`, `compile.mjs`, `contract/counter.compact` |
 | `docs/` | this documentation |

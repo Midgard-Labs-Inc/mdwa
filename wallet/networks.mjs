@@ -8,37 +8,36 @@
 // extension/src/custom.js). It has DUST unless its definition says
 // `dust: false`, in which case nothing pays a fee there.
 //
-// The built-in endpoints are defaults: every one is editable per network in
-// Settings. Blockfrost hosts Mainnet and Preprod and wants a project id,
-// which the user types in Settings and which is appended as `?project_id=` to
-// all three URLs at connection time only. The id is a credential: it is
-// never stored inside a URL and never handed to a dApp (see publicEndpoints).
+// A built-in network connects through its default provider (`provider`, as
+// the user reads it) or through the user's own node and indexer, set per
+// network in Settings. Mainnet has no default: it connects only once the user
+// has set all three addresses. Preprod's default is Blockfrost, since
+// Midnight's own public Preprod endpoints were retired. Blockfrost wants a
+// project id, which the user types in Settings and which is appended as
+// `?project_id=` to every address on blockfrost.io at connection time only.
+// The id is a credential: it is never stored inside a URL and never handed to
+// a dApp (see publicEndpoints).
 //
 // A network the user adds is stored in the settings (`networks`, by a key of
 // its own, see userNetworkKey) with its endpoints in its definition: editing
 // the network edits them. Only its prover is a setting, as on the built-in
 // ones.
 export const NETWORKS = {
-  mainnet: {
-    name: 'Mainnet', networkId: 'mainnet', blockfrost: true,
-    node: 'wss://rpc.midnight-mainnet.blockfrost.io',
-    indexerHttp: 'https://midnight-mainnet.blockfrost.io/api/v0',
-    indexerWs: 'wss://midnight-mainnet.blockfrost.io/api/v0/ws',
-  },
+  mainnet: { name: 'Mainnet', networkId: 'mainnet' },
   preprod: {
-    name: 'Preprod', networkId: 'preprod', blockfrost: true,
+    name: 'Preprod', networkId: 'preprod', provider: 'Blockfrost',
     node: 'wss://rpc.midnight-preprod.blockfrost.io',
     indexerHttp: 'https://midnight-preprod.blockfrost.io/api/v0',
     indexerWs: 'wss://midnight-preprod.blockfrost.io/api/v0/ws',
   },
   preview: {
-    name: 'Preview', networkId: 'preview',
+    name: 'Preview', networkId: 'preview', provider: "Midnight's public node and indexer",
     node: 'wss://rpc.preview.midnight.network',
     indexerHttp: 'https://indexer.preview.midnight.network/api/v4/graphql',
     indexerWs: 'wss://indexer.preview.midnight.network/api/v4/graphql/ws',
   },
   undeployed: {
-    name: 'Undeployed', networkId: 'undeployed',
+    name: 'Undeployed', networkId: 'undeployed', provider: 'a local node and indexer',
     node: 'ws://localhost:9944',
     indexerHttp: 'http://localhost:8088/api/v4/graphql',
     indexerWs: 'ws://localhost:8088/api/v4/graphql/ws',
@@ -106,19 +105,36 @@ export function endpointsOf(n, stored) {
   };
 }
 
-/** Whether `url` is served by Blockfrost, which wants a project id. */
-const onBlockfrost = url => /(^|\.)blockfrost\.io$/.test(new URL(url).hostname);
+/** Whether endpoints `e` (endpointsOf) name a node or submit URL and both
+ *  indexer URLs: a network without a default has none until the user sets them. */
+export const hasEndpoints = e => [e.node ?? e.submitUrl, e.indexerHttp, e.indexerWs].every(Boolean);
 
-/** The URLs to connect with: the Blockfrost project id goes onto every one.
- *  Throws the message the sync status shows when a Blockfrost network has no
- *  id while one of its endpoints is still on Blockfrost: a network pointed at
- *  the user's own node and indexer needs none. */
-export function connectionUrls(n, endpoints) {
+/** Whether `url` is served by Blockfrost, which wants a project id. */
+const onBlockfrost = url => {
+  try { return /(^|\.)blockfrost\.io$/.test(new URL(url).hostname); } catch { return false; }
+};
+
+/** Whether any of endpoints `e` is on Blockfrost, and so needs a project id. */
+export const needsProjectId = e => [e.node ?? e.submitUrl, e.indexerHttp, e.indexerWs].some(onBlockfrost);
+
+/** Why network `n` cannot be connected to with its stored `endpoints` (the
+ *  message the sync status shows), or null when it can. */
+export function connectionProblem(n, endpoints) {
   const e = endpointsOf(n, endpoints);
-  const needsId = n.blockfrost && [e.node ?? e.submitUrl, e.indexerHttp, e.indexerWs].some(onBlockfrost);
-  if (needsId && !e.projectId) throw new Error('Add a Blockfrost project id in Settings');
+  if (!hasEndpoints(e)) return `${n.name} needs a node and an indexer: set them in Connection settings`;
+  if (needsProjectId(e) && !e.projectId) return 'Add a Blockfrost project id, or use your own node and indexer, in Connection settings';
+  return null;
+}
+
+/** The URLs to connect with: the Blockfrost project id goes onto every
+ *  address on Blockfrost, and onto no other. Throws connectionProblem's
+ *  message, marked `permanent` (retrying does not fix it). */
+export function connectionUrls(n, endpoints) {
+  const problem = connectionProblem(n, endpoints);
+  if (problem) throw Object.assign(new Error(problem), { permanent: true });
+  const e = endpointsOf(n, endpoints);
   const withId = url => {
-    if (!e.projectId) return url;
+    if (!e.projectId || !onBlockfrost(url)) return url;
     const u = new URL(url);
     u.searchParams.set('project_id', e.projectId);
     return u.toString();
@@ -128,10 +144,12 @@ export function connectionUrls(n, endpoints) {
 
 /** Network `n`'s endpoints with `entry` applied, checked: each a URL of the
  *  right scheme, and for a user network one the page policy lets the engine
- *  reach (policyBlocks). */
+ *  reach (policyBlocks). A network without a default may be left with none
+ *  set, never with some. */
 export function checkedEndpoints(n, entry) {
   const e = endpointsOf(n, entry);
-  for (const key of [e.submitUrl ? 'submitUrl' : 'node', 'indexerHttp', 'indexerWs']) {
+  const keys = [e.submitUrl ? 'submitUrl' : 'node', 'indexerHttp', 'indexerWs'];
+  for (const key of keys.some(k => e[k]) ? keys : []) {
     let u;
     try { u = new URL(e[key]); } catch { throw new Error(`${n.name}: ${key} is not a URL`); }
     const ok = key === 'node' || key === 'indexerWs' ? /^wss?:$/.test(u.protocol) : /^https?:$/.test(u.protocol);

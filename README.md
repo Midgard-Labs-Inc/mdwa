@@ -37,9 +37,10 @@ test networks, or amounts you can afford to lose.
 
 It runs in Chrome and Chromium-based browsers, version 116 or newer.
 
-**Updating.** A release does not update itself. Unzip the new version over the
-same folder (or replace the folder's contents with it), then press the reload
-arrow on mdwa's card in `chrome://extensions` and unlock with your password.
+**Updating.** A release does not update itself. Unzip the new version and
+copy the contents of its `mdwa-<version>` folder into the folder you loaded the
+extension from, replacing its files. Then press the reload arrow on mdwa's card
+in `chrome://extensions` and unlock with your password.
 The extension's id comes from the folder's path, so it keeps its id and with it
 the wallet's data. Loaded from a different folder, it is another extension,
 with a new, empty wallet.
@@ -52,9 +53,11 @@ stay on chain; the phrase restores them.
 
 See [Building from source](docs/technical.md#building-from-source).
 
-Preprod and Mainnet go through Blockfrost and need a project id in Settings,
-unless you point them at your own node and indexer. The welcome screen's
-Connection settings sets the endpoints before you create a wallet.
+Each built-in network connects through its default services or through your
+own node and indexer, chosen in Connection settings (the welcome screen's
+link, before you create a wallet). Preprod's default is Blockfrost, since
+Midnight's own public Preprod endpoints were retired, and needs a Blockfrost
+project id. Mainnet has no default: set a node and an indexer before using it.
 
 ## Documentation
 
