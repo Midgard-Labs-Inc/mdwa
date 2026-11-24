@@ -142,6 +142,21 @@ export function connectionUrls(n, endpoints) {
   return { ...submission(n, key => withId(e[key])), indexerHttp: withId(e.indexerHttp), indexerWs: withId(e.indexerWs), prover: e.prover };
 }
 
+/** The anonymity level the DUST sync looks up the wallet's spends with on
+ *  network `n` with its stored `endpoints`: 0 (the narrowest lookups, much
+ *  faster, telling the indexer more about which spends are the wallet's) when
+ *  a built-in network reads the user's own indexer, that is both indexer
+ *  addresses are set, are not the network's defaults and are not Blockfrost's;
+ *  otherwise undefined, the SDK's default. A network the user added keeps the
+ *  default: its definition does not record whether the user typed it in or a
+ *  site offered it. */
+export function dustAnonymityLevel(n, endpoints) {
+  if (!n.dust || n.user) return undefined;
+  const e = endpointsOf(n, endpoints), d = defaultEndpoints(n);
+  const own = ['indexerHttp', 'indexerWs'].every(key => e[key] && !onBlockfrost(e[key]) && !(d[key] && sameEndpoint(e[key], d[key])));
+  return own ? 0 : undefined;
+}
+
 /** Network `n`'s endpoints with `entry` applied, checked: each a URL of the
  *  right scheme, and for a user network one the page policy lets the engine
  *  reach (policyBlocks). A network without a default may be left with none

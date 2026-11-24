@@ -7,7 +7,8 @@
 //
 // Covered: definitions (a node or a submit URL, with or without DUST), their
 // validation and the page policy check; when a built-in network can connect
-// and where its Blockfrost project id goes; the chain-identity check; the start-up capability check
+// and where its Blockfrost project id goes; how narrowly its DUST sync looks
+// up spends; the chain-identity check; the start-up capability check
 // per DUST switch; the HTTP submission outcomes as the facade classifies them;
 // the stand-in DUST wallet against the SDK's interface and the facade's
 // "synced".
@@ -18,10 +19,10 @@ import { fileURLToPath } from 'node:url';
 import { FacadeState, MidnightBech32m, ProtocolVersion, UnshieldedAddress, WalletSeeds } from '@midnightntwrk/wallet-sdk';
 import { classifySubmissionFailure } from '@midnightntwrk/wallet-sdk/capabilities/submission';
 import * as ledger from '@midnightntwrk/ledger-v9';
-import { checkedEndpoints, connectionUrls, network, policyBlocks, publicEndpoints } from '../wallet/networks.mjs';
+import { checkedEndpoints, connectionUrls, defaultEndpoints, dustAnonymityLevel, network, policyBlocks, publicEndpoints } from '../wallet/networks.mjs';
 import * as custom from '../extension/src/custom.js';
 import { missingQueries } from '../extension/src/birthday.js';
-import { syncOf } from '../extension/src/midnight.js';
+import { sdkConfiguration, syncOf } from '../extension/src/midnight.js';
 import { compactAddress, shortAddress } from '../extension/src/ui/format.js';
 
 let checks = 0;
@@ -74,6 +75,25 @@ await ok('a built-in network needs all three addresses, and a project id only wh
   assert.deepEqual(connectionUrls(preprod, { ...own, projectId: 'id' }), { ...own, prover: { kind: 'wasm', url: 'http://localhost:6300' } });
   const mixed = connectionUrls(mainnet, { ...own, node: 'wss://rpc.midnight-mainnet.blockfrost.io', projectId: 'id' });
   assert.deepEqual([mixed.node, mixed.indexerHttp], ['wss://rpc.midnight-mainnet.blockfrost.io/?project_id=id', own.indexerHttp]);
+});
+await ok('DUST spend lookups narrow (anonymity level 0) only on a built-in network read through the user\'s own indexer', () => {
+  const preview = network('preview'), preprod = network('preprod');
+  const own = { node: 'wss://node.example', indexerHttp: 'https://indexer.example/graphql', indexerWs: 'wss://indexer.example/graphql/ws' };
+  assert.equal(dustAnonymityLevel(preview, {}), undefined);
+  assert.equal(dustAnonymityLevel(preview, { ...defaultEndpoints(preview), indexerHttp: `${preview.indexerHttp}/` }), undefined);
+  assert.equal(dustAnonymityLevel(preprod, { projectId: 'id' }), undefined);
+  assert.equal(dustAnonymityLevel(preview, own), 0);
+  assert.equal(dustAnonymityLevel(preprod, { ...defaultEndpoints(preprod), indexerHttp: own.indexerHttp, indexerWs: own.indexerWs }), 0);
+  assert.equal(dustAnonymityLevel(network('mainnet'), own), 0);
+  assert.equal(dustAnonymityLevel(preprod, { ...defaultEndpoints(preprod), node: own.node }), undefined);
+  assert.equal(dustAnonymityLevel(preview, { ...own, indexerWs: preview.indexerWs }), undefined);
+  assert.equal(dustAnonymityLevel(network('mainnet'), { ...own, indexerHttp: 'https://midnight-mainnet.blockfrost.io/api/v0', indexerWs: 'wss://midnight-mainnet.blockfrost.io/api/v0/ws' }), undefined);
+  assert.equal(dustAnonymityLevel({ ...preview, dust: false }, own), undefined);
+  // A user network, typed in or offered by a site (the stored definition is the same), keeps the default.
+  assert.equal(dustAnonymityLevel(withNode, {}), undefined);
+  assert.equal(dustAnonymityLevel(withSubmit, {}), undefined);
+  assert.equal(sdkConfiguration(preview, {}).anonymityLevel, undefined);
+  assert.equal(sdkConfiguration(preview, own).anonymityLevel, 0);
 });
 await ok('an unknown network key is refused, an inherited object property included', () => {
   assert.throws(() => network('nowhere', user), /Unknown network/);

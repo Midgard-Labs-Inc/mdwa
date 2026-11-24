@@ -414,7 +414,16 @@ flowchart TD
 A wallet that has spent DUST many times costs more on its first projections
 pass: each of its past DUST spends is resolved by a nullifier lookup of its
 own, in sequence, from block 0, and each later pass looks up every DUST coin
-the wallet holds.
+the wallet holds. How wide each lookup is follows the configuration's
+`anonymityLevel`: the indexers the wallet ships with keep the SDK's default
+(7); a built-in network whose indexer addresses are your own (set, not the
+network's defaults and not Blockfrost's) uses 0, the narrowest lookups. Networks you or a site added keep the default, since their stored
+definition does not tell the two apart. Measured on Preprod in November 2026:
+at level 7 a lookup matched a 1-byte prefix and returned about 4,000
+transactions (24 MB, about 21 s), at level 0 a 2-byte prefix and about 22
+(0.15 MB, 0.8 s); a wallet with dozens of past spends sat at 0% for tens of
+minutes on its first pass at level 7. The level is read each time the wallet
+opens, so a change of connection applies when the wallet reconnects with it.
 
 ### Wallets from before fast sync
 
@@ -719,6 +728,13 @@ The test dApp is described in [dApp connector](dapp-connector.md#the-local-test-
   reports, but neither is cross-checked against the node. A wrong tree from the
   indexer cannot spend your funds; it would make the wallet miss coins or
   build transactions the chain rejects.
+- **Your own indexer learns more about your DUST spends.** With your own
+  indexer, the DUST sync's spend lookups use anonymity level 0 instead of
+  the SDK's default 7, so that indexer sees a much narrower group of spends
+  around each of yours (on Preprod in November 2026, about 22 transactions
+  instead of about 4,000; see
+  [What each wallet downloads](#what-each-wallet-downloads)). Choose it for an
+  indexer you run or trust; the default addresses keep level 7.
 - **Shielded tokens before the birthday are not found.** A restore with a date
   skips everything before it; Rescan from the start of the chain finds it.
 - **DUST sync and ledger forks.** The SDK's projections sync does not handle a

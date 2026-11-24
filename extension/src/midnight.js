@@ -43,7 +43,7 @@ import * as ledger from '@midnightntwrk/ledger-v9';
 import * as ledgerV8 from '@midnightntwrk/ledger-v8';
 import { mnemonicToSeed } from '@scure/bip39';
 import { fewestInputs } from '../../wallet/coins.mjs';
-import { connectionUrls } from '../../wallet/networks.mjs';
+import { connectionUrls, dustAnonymityLevel } from '../../wallet/networks.mjs';
 import { gql, shieldedAnchor, zswapCollapsedUpdate } from './birthday.js';
 import { noDustWallet, submissionService } from './custom.js';
 
@@ -106,6 +106,9 @@ export function sdkConfiguration(net, endpoints, txHistoryStorage) {
     // no node: the SDK then skips that check, and custom.js submits.
     ...(urls.node ? { relayURL: new URL(urls.node) } : {}),
     indexerClientConnection: { indexerHttpUrl: urls.indexerHttp, indexerWsUrl: urls.indexerWs },
+    // How narrowly the DUST sync looks up spends (see FastDustWallet), read
+    // anew each time the wallet opens.
+    anonymityLevel: dustAnonymityLevel(net, endpoints),
     // A proof server is one URL for whichever ledger version a transaction
     // belongs to. The in-process prover is set up by wasmProvingService below
     // (this entry only tells the SDK a prover exists).
@@ -344,11 +347,12 @@ const tipVersionProbe = indexerHttp => async () => {
  * network is most of what a fresh wallet downloads. A projections pass asks
  * the indexer for the DUST generations of this wallet's own DUST address,
  * resolves which of them were spent through nullifier lookups that match on
- * a prefix only (so the indexer cannot tell which nullifier is the wallet's),
- * and takes the DUST commitment tree as one collapsed update, then checks
- * both tree roots against the block it read. Passes repeat every
- * DUST_PASS_INTERVAL_MS (the configuration's backgroundSyncInterval, which
- * the SDK's projections service reads).
+ * a prefix only (so the indexer cannot tell which nullifier is the wallet's;
+ * the configuration's anonymityLevel sets how short the prefix is, see
+ * wallet/networks.mjs dustAnonymityLevel), and takes the DUST commitment tree
+ * as one collapsed update, then checks both tree roots against the block it
+ * read. Passes repeat every DUST_PASS_INTERVAL_MS (the configuration's
+ * backgroundSyncInterval, which the SDK's projections service reads).
  *
  * The chain-version probe asks for the tip's version, not block 0's as the
  * SDK's default does: projections keep no event cursor, so a fresh wallet

@@ -117,6 +117,11 @@ function Connection({ state, name, definition, stored, defaults, onSave }) {
   return (
     <Section title="Connection" gap="gap-3">
       <Segmented label={`Where ${name} connects`} options={choices} value={via} onChange={setVia} />
+      {via === 'own' && (
+        <p className="px-1 text-xs leading-normal text-kumo-subtle">
+          With your own indexer, the wallet asks it for a narrower group of DUST spends: much faster, and it tells that indexer more about which spends are yours.
+        </p>
+      )}
       {via === 'own'
         ? ADDRESSES.map(([key, label, placeholder]) => (
           <TextField key={key} label={label} mono value={typed[key]} placeholder={placeholder} spellCheck={false}
