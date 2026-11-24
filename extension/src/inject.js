@@ -25,8 +25,15 @@
 
   let next = 0;
   const pending = new Map();
+  const networkListeners = new Set();
   window.addEventListener('message', event => {
     if (event.source !== window || event.data?.source !== CONTENT) return;
+    if (event.data.event === 'networkChange') {
+      for (const notify of [...networkListeners]) {
+        try { notify(); } catch (error) { reportError(error); }
+      }
+      return;
+    }
     const waiter = pending.get(event.data.id);
     if (!waiter) return;
     pending.delete(event.data.id);
@@ -157,8 +164,11 @@
     });
   }
 
-  // Beyond the API: connect's optional `{ endpoint }` and addNetwork (see
-  // docs/dapp-connector.md, "Beyond the standard API").
+  // Beyond the API: connect's optional `{ endpoint }`, connect without a
+  // network id (the selected network, never switching), addNetwork and
+  // onNetworkChange (see docs/dapp-connector.md, "Beyond the standard API").
+  // A listener is called with no arguments when mdwa's network changes, only
+  // while this page holds a connection; it returns a function that removes it.
   const initialApi = Object.freeze({
     rdns: 'wallet.mdwa',
     name: 'mdwa',
@@ -169,6 +179,12 @@
       return connectedApi(connectionId);
     },
     addNetwork: definition => request('addNetwork', { definition }),
+    onNetworkChange: listener => {
+      if (typeof listener !== 'function') throw apiError({ code: 'InvalidRequest', reason: 'onNetworkChange takes a function' });
+      const notify = () => { listener(); };
+      networkListeners.add(notify);
+      return () => { networkListeners.delete(notify); };
+    },
   });
 
   // ------------------------------------------------------------ install ---

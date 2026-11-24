@@ -35,8 +35,9 @@ object and its entries. The `InitialAPI` object is frozen:
 | `name` | `mdwa` |
 | `apiVersion` | `4.1.0` |
 | `icon` | a data URL of the brand mark |
-| `connect(networkId, options?)` | asks to connect, switching network if needed; returns the `ConnectedAPI` (see [Connecting](#connecting)) |
+| `connect(networkId, options?)` | asks to connect, switching network if needed; returns the `ConnectedAPI` (see [Connecting](#connecting)). Without a network id, connects on the selected network; beyond the API (see [connect without a network id](#connect-without-a-network-id)) |
 | `addNetwork(definition)` | offers a network to add; beyond the API (see [addNetwork](#addnetwork)) |
+| `onNetworkChange(listener)` | calls `listener` when mdwa's network changes, while the page is connected; beyond the API (see [onNetworkChange](#onnetworkchange)) |
 
 Only top-level frames get the object, since the content scripts are not
 registered for iframes.
@@ -134,16 +135,66 @@ A connection is **bound to the network it was made on**. When you switch
 network, remove the wallet or disconnect the site, every call of that connection
 fails with `Disconnected`, and `getConnectionStatus` answers `disconnected`,
 until the dApp connects again. Disconnecting a site in the Sites tab also
-removes its stored permissions.
+removes its stored permissions. A page that follows the network you select
+connects without a network id and listens with `onNetworkChange` (see
+[Beyond the standard API](#beyond-the-standard-api)).
 
 ## Beyond the standard API
 
-mdwa adds two methods and one option to the DApp Connector API 4.1.0. They are
-generic: nothing in them names a network or a site. A page detects them with
-`typeof wallet.addNetwork === 'function'` and
+mdwa adds three methods, one option and a connect without a network id to the
+DApp Connector API 4.1.0. They are generic: nothing in them names a network or
+a site. A page detects the methods with
+`typeof wallet.addNetwork === 'function'`,
+`typeof wallet.onNetworkChange === 'function'` and
 `typeof api.watchToken === 'function'`; the option is `connect`'s
 `{ endpoint }` (see [Connecting](#connecting)). Errors are the API's, as
 everywhere (see [Errors](#errors)).
+
+### connect without a network id
+
+```ts
+connect(networkId?: undefined | null, options?: object): Promise<ConnectedAPI>
+```
+
+- It connects on the network mdwa has selected at that moment, and never
+  switches. It resolves to the same `ConnectedAPI` as `connect(networkId)`:
+  `getConnectionStatus()` answers `connected` with that network's id, and
+  `getConfiguration()` its endpoints.
+- **Approval** is that of a connect naming the selected network (step 2 of
+  [Connecting](#connecting)): the first time a site connects on a network, the
+  **connect** window names the selected network and asks; an approved site
+  connects again without a window. A locked wallet, a network without a
+  wallet, a busy wallet and a rejection are handled as they are there, with
+  the same codes.
+- `options` may still be passed, and must be an object if it is; `endpoint`
+  means nothing without a network id and is ignored.
+
+### onNetworkChange
+
+On the wallet object, beside `connect`:
+
+```ts
+onNetworkChange(listener: () => void): () => void
+```
+
+- It registers `listener` and returns a function that removes it. A listener
+  that is not a function is `InvalidRequest`.
+- **When.** `listener` is called with no arguments, once per change, when
+  mdwa's selected network changes: you pick another network in the popup, you
+  remove the selected network (mdwa selects Preview), or a site's `connect`
+  for another network switches it.
+- **Who.** Only a page that holds a connection on the network left, made by
+  an origin still approved there, is told. A page that never connected, or
+  whose origin is not approved, learns nothing, not even that a change
+  happened. The notice carries no network id.
+- **Then.** The page's connection ends as on any switch: every call fails with
+  `Disconnected`. To follow mdwa, the page calls `connect()` again, which
+  binds to the new network, silently if the site is approved there and
+  otherwise through the **connect** window.
+- The background sends the notice to the page's own document (Chrome's
+  `documentId`), through the content script, which hands it to the page. Which
+  pages hold a connection is kept in session storage, so a restart of the
+  background's service worker does not forget it.
 
 ### addNetwork
 
@@ -451,6 +502,9 @@ Errors reach the page as `Error`s with `type: "DAppConnectorAPIError"` and a
   waits behind a send, and the in-browser prover is slow; see
   [Proving](technical.md#proving).
 - The connector object is installed in top-level frames only.
+- `onNetworkChange` reaches a page that is loaded at the time of the change.
+  A page in the back/forward cache then is not told; on its return its calls
+  fail with `Disconnected`.
 - Approval windows name a custom token by your label for it, or by its short
   type when it has none (see [Custom tokens](technical.md#custom-tokens)).
 
@@ -476,7 +530,8 @@ This builds the page with esbuild and serves it on `http://localhost:5190`,
 bound to `127.0.0.1` (`node dapp/serve.mjs --port 5191` changes the port). The
 compiled contract is served under `/managed`, the layout Midnight.js's
 `FetchZkConfigProvider` reads. The page's network id field starts at
-`undeployed`; change it to the network to connect on (mdwa switches to it).
+`undeployed`; change it to the network to connect on (mdwa switches to it), or
+connect on the network mdwa is on without one.
 
 ```bash
 npm run dapp:contract
@@ -487,11 +542,12 @@ kB; the output is kept in the repository). It expects the `compact` tool and the
 public parameters in `~/.cache/midnight/zk-params`, or `MIDNIGHT_ZK_PARAMS`.
 
 The page's actions: connect (with an optional endpoint, switching network),
-connect to a network id mdwa does not have, `addNetwork` and `watchToken` with a JSON
+connect on the wallet's network (no network id), connect to a network id mdwa
+does not have, `addNetwork` and `watchToken` with a JSON
 definition or token you edit on the page, the reads,
 `signData`, the three transfers (unshielded, without fees, shielded),
 `balanceSealedTransaction`, `submitTransaction`, `makeIntent` (and a refused
 segment), deploy, increment, deposit and read counter, a transport test that
 pushes a large prover key through the chunked upload, and a proof of a bad
-preimage. `npm run check:connector` drives this page through most of the
+preimage. The log shows a line when `onNetworkChange` fires. `npm run check:connector` drives this page through most of the
 standard connector API.

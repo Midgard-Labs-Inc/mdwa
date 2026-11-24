@@ -1,6 +1,7 @@
 // Isolated-world relay between the page's connector object (inject.js) and
 // the background. It keeps one Port per page open to the background, which
-// learns the page's origin from Chrome, never from the page.
+// learns the page's origin from Chrome, never from the page, and passes on
+// the background's notice of a network change.
 //
 // Messages to the background are JSON and Chrome caps each one (64 MiB), so
 // bytes travel as base64: small values inline ({ $bytes }), large ones (a
@@ -88,6 +89,13 @@ function fromWire(value) {
   }
   return value;
 }
+
+// The background's notice that mdwa's network changed, sent to this
+// document alone and only while it holds a connection (see background.js):
+// the page's object calls its onNetworkChange listeners.
+chrome.runtime.onMessage.addListener(message => {
+  if (message?.type === 'networkChange') window.postMessage({ source: CONTENT, event: 'networkChange' }, window.location.origin);
+});
 
 window.addEventListener('message', event => {
   if (event.source !== window || event.data?.source !== PAGE) return;

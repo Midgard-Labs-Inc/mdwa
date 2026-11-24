@@ -26,6 +26,7 @@ flowchart LR
   end
   inject --> content["content script<br/>(isolated world)"]
   content -- "one Port per page" --> bg["background service worker<br/>connector routing · permissions · approval windows"]
+  bg -. "network change notice<br/>(connected pages only)" .-> content
   popup["popup / approval windows<br/>(React)"] --> bg
   bg -- "one Port" --> off["offscreen document"]
   subgraph engine["engine worker"]
@@ -70,7 +71,8 @@ pieces:
   engine reports and send it requests. They load no WASM.
 - **Content scripts** (`content.js`, `inject.js`). `inject.js` installs the
   connector object in the page's own world; `content.js` relays its calls to
-  the background. Both are small classic scripts with no packages in them, and
+  the background, and the background's notice of a network change (sent only
+  to a page connected on the network left) to the page. Both are small classic scripts with no packages in them, and
   they run in every `http` and `https` page (top-level frames only, since the
   manifest does not ask for frames).
 

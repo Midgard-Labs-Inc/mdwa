@@ -5,13 +5,14 @@
 //
 //   node scripts/requests-check.mjs
 //
-// Covered: which networks a connect names by network id and endpoint; the
+// Covered: which networks a connect names by network id and endpoint, and
+// without a network id; which pages a change of network is told to; the
 // label rules as applied to a token name a page suggests (watchToken); the
 // shielded coins of this wallet a transaction spends and receives, on a
 // transaction built with the ledger.
 import assert from 'node:assert/strict';
 import * as ledger from '@midnightntwrk/ledger-v9';
-import { networksMatching, sameEndpoint } from '../wallet/networks.mjs';
+import { networksMatching, pagesConnectedOn, sameEndpoint } from '../wallet/networks.mjs';
 import { deriveTokenType, pageLabel } from '../extension/src/tokens.js';
 import { describeLedgerTransaction, ownNullifiers, shieldedEffect } from '../extension/src/midnight.js';
 
@@ -41,6 +42,36 @@ ok('connect names the networks with its network id, narrowed by the endpoint', (
   assert.deepEqual(networksMatching(networks, 'preprod', 'ws://127.0.0.1:9944').map(n => n.id), ['preprod']);
   assert.deepEqual(networksMatching(networks, 'preprod', 'ws://127.0.0.1:9945'), []);
   assert.deepEqual(networksMatching(networks, 'mainnet'), []);
+});
+
+// The background binds a connect to the selected network when it is among
+// those named, and switches only otherwise.
+ok('connect without a network id names the selected network alone, so it binds there and never switches', () => {
+  for (const current of networks.map(n => n.id)) {
+    for (const networkId of [undefined, null]) {
+      assert.deepEqual(networksMatching(networks, networkId, null, current).map(n => n.id), [current]);
+      assert.deepEqual(networksMatching(networks, networkId, 'http://127.0.0.1:8188/v1/submit', current).map(n => n.id), [current]);
+    }
+  }
+});
+
+ok('connect without a network id binds where a connect naming the selected network does, under the same approval', () => {
+  for (const n of networks) assert.deepEqual(networksMatching(networks, undefined, null, n.id), networksMatching(networks, n.networkId, n.node));
+});
+
+ok('a change of network is told to the pages connected on the network left, and to no other', () => {
+  const page = (origin, ...on) => ({ origin, connections: Object.fromEntries(on.map((network, i) => [`c${i}`, { network, connectedAt: 0 }])) });
+  const connected = page('https://a.example', 'user-1', 'preprod');
+  const pages = [
+    connected,
+    page('https://a.example'),                 // the same origin, another page that never connected
+    page('https://b.example', 'user-1'),       // connected on another network
+    page('https://c.example', 'preprod'),      // connected, but no longer approved there
+    page('https://d.example'),                 // approved, never connected
+  ];
+  const approved = { 'https://a.example': {}, 'https://b.example': {}, 'https://d.example': {} };
+  assert.deepEqual(pagesConnectedOn(pages, 'preprod', approved), [connected]);
+  assert.deepEqual(pagesConnectedOn(pages, 'preprod', {}), []);
 });
 
 // --------------------------------------------------------------- labels ---

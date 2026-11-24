@@ -89,9 +89,10 @@ async function wallet() {
   const w = await store.get('wallet');
   if (w) return w;
   if (!state.hasWallet) throw new Error(`No wallet on ${net().name}`);
-  // The shared wallet before its first session here (see openShared).
+  // The shared wallet before its first session here (see openShared), with
+  // its shielded keys, which state.addresses leaves out.
   if (state.locked) throw lockedError();
-  return { shared: true, addresses: state.addresses };
+  return { shared: true, addresses: derived(store.network, unlocked.get(store.network).seedHex) };
 }
 
 /** The shared seed's addresses on network `id`, derived once per unlock. */

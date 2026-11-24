@@ -82,18 +82,21 @@ function inspect() {
 }
 
 const networkId = () => $('network').value.trim();
+async function connected(next) {
+  api = next;
+  counter.providers = null;
+  $('icon').src = wallet().icon;
+  return { frozen: Object.isFrozen(api), methods: Object.keys(api), status: await api.getConnectionStatus() };
+}
 const myAddresses = async () => ({ ...(await api.getUnshieldedAddress()), ...(await api.getShieldedAddresses()) });
 
 const actions = {
   inspect: async () => inspect(),
   // With an endpoint, connect names one of several networks with this id; a
   // wallet on another network switches (see "Beyond the standard API").
-  connect: async (id = networkId(), endpoint = $('endpoint').value.trim()) => {
-    api = await wallet().connect(id, endpoint ? { endpoint } : undefined);
-    counter.providers = null;
-    $('icon').src = wallet().icon;
-    return { frozen: Object.isFrozen(api), methods: Object.keys(api), status: await api.getConnectionStatus() };
-  },
+  connect: async (id = networkId(), endpoint = $('endpoint').value.trim()) => connected(await wallet().connect(id, endpoint ? { endpoint } : undefined)),
+  // Without a network id: the network mdwa is on, never switching.
+  connectToWalletNetwork: async () => connected(await wallet().connect()),
   addNetwork: async definition => wallet().addNetwork(definition ?? JSON.parse($('definition').value)),
   watchToken: async request => api.watchToken(request ?? JSON.parse($('token').value)),
   // A network id no wallet has: mdwa answers "No network …" (any other id it
@@ -336,3 +339,6 @@ for (const button of document.querySelectorAll('button[data-action]')) {
   button.addEventListener('click', () => window.dapp[button.dataset.action]());
 }
 log('installed wallets', inspect());
+// mdwa's notice that its network changed, sent only while this page is connected.
+const mdwa = wallets().find(([, w]) => w?.rdns === 'wallet.mdwa')?.[1];
+if (typeof mdwa?.onNetworkChange === 'function') mdwa.onNetworkChange(() => log('onNetworkChange', 'mdwa changed network: connect again'));

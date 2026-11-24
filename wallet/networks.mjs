@@ -178,11 +178,21 @@ export function sameEndpoint(a, b) {
   return k !== null && k === key(b);
 }
 
-/** The networks of `list` (`{ networkId, node }`, `node` as a site sees it,
- *  see publicEndpoints) a site's `connect(networkId, { endpoint })` names:
- *  those with that network id, narrowed by `endpoint` when given. */
-export const networksMatching = (list, networkId, endpoint = null) => list.filter(n => n.networkId === networkId
-  && (endpoint === null || endpoint === undefined || sameEndpoint(n.node, endpoint)));
+/** The networks of `list` (`{ id, networkId, node }`, `node` as a site sees
+ *  it, see publicEndpoints) a site's `connect(networkId, { endpoint })` names:
+ *  those with that network id, narrowed by `endpoint` when given. Without a
+ *  network id (undefined or null) it names the selected network, `current`,
+ *  alone, and `endpoint` means nothing. */
+export const networksMatching = (list, networkId, endpoint = null, current = null) => (networkId === undefined || networkId === null
+  ? list.filter(n => n.id === current)
+  : list.filter(n => n.networkId === networkId && (endpoint === null || endpoint === undefined || sameEndpoint(n.node, endpoint))));
+
+/** The pages (`{ origin, connections }`, as the background keeps them) told
+ *  that the selected network changed away from `network`: those holding a
+ *  connection made on it, of an origin still approved there (`approved`, that
+ *  network's sites by origin). No other page learns of the change. */
+export const pagesConnectedOn = (pages, network, approved) => pages.filter(p => Object.hasOwn(approved, p.origin)
+  && Object.values(p.connections).some(c => c.network === network));
 
 /** What a dApp may see of the endpoints: the base URLs, never the project id.
  *  A network that takes transactions over HTTP reports its submit URL as the

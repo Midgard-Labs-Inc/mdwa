@@ -5,7 +5,7 @@
 // offscreen document's worker; this worker never holds seeds.
 // Passwords typed into a page pass through here to the engine and are not
 // kept.
-import { networksMatching } from '../../wallet/networks.mjs';
+import { networksMatching, pagesConnectedOn } from '../../wallet/networks.mjs';
 
 const BUILD = __BUILD_ID__;
 
@@ -194,11 +194,13 @@ async function decide(id, approved, choice = null) {
 // Permission model:
 // - connect(networkId, { endpoint }) asks the user once per site and
 //   network (the `connect` window), switching network when it names
-//   another (see connect below), and stores the site under `sites`. A
-//   connection is bound to the network it was made on: after a switch of
-//   network, a removed wallet or a disconnected site, every call of that
-//   connection fails with Disconnected and getConnectionStatus says
-//   'disconnected' until the dApp connects again.
+//   another (see connect below), and stores the site under `sites`;
+//   connect() without a network id does the same on the selected network,
+//   never switching. A connection is bound to the network it was made on:
+//   after a switch of network, a removed wallet or a disconnected site, every
+//   call of that connection fails with Disconnected and getConnectionStatus says
+//   'disconnected' until the dApp connects again. A change of network is
+//   told to the pages connected on the network left (see changingNetwork).
 // - addNetwork (on the wallet object) and watchToken (connected) go beyond
 //   the API: a network or a token name the user approves in a window.
 // - Free once connected: getConfiguration, getConnectionStatus, hintUsage,
@@ -236,18 +238,19 @@ const wireError = error => ({
   reason: String(error?.message ?? error),
 });
 
-// Per page (document): the connections it made and the permissions it was
-// refused. Kept in session storage so a restart of this worker forgets
-// neither; dropped when the tab closes.
+// Per page (document): the connections it made, the permissions it was
+// refused, and where a message to that document goes (`target`). Kept in
+// session storage so a restart of this worker forgets none of them; dropped
+// when the tab closes.
 let sessions = null;
 async function loadSessions() {
   sessions ??= (await chrome.storage.session.get('dappSessions')).dappSessions ?? {};
   return sessions;
 }
 const saveSessions = () => chrome.storage.session.set({ dappSessions: sessions });
-async function sessionOf(key, origin, tabId) {
+async function sessionOf(key, origin, tabId, target) {
   await loadSessions();
-  sessions[key] ??= { origin, tabId, rejected: [], connections: {} };
+  sessions[key] ??= { origin, tabId, target, rejected: [], connections: {} };
   return sessions[key];
 }
 chrome.tabs.onRemoved.addListener(async tabId => {
@@ -300,7 +303,8 @@ async function requirePermission(session, origin, network, method) {
 
 // connect(networkId, { endpoint }) names the networks of the wallet with that
 // network id, narrowed by `endpoint` (where transactions go, as
-// getConfiguration reports it). One of them selected: as on any connect.
+// getConfiguration reports it); connect() without one names the selected
+// network alone, so it never switches. One of them selected: as on any connect.
 // Otherwise the wallet switches, through the engine's own switch (the old
 // network's session stops and saves, and its connections end): silently to
 // the network the site is approved on, else after the Connect window, which
@@ -332,12 +336,13 @@ async function newConnection(session, context) {
 }
 
 async function connect(session, origin, networkId, options) {
-  if (typeof networkId !== 'string' || !networkId) throw apiError('InvalidRequest', 'connect needs a network id');
+  const named = networkId !== undefined && networkId !== null;
+  if (named && (typeof networkId !== 'string' || !networkId)) throw apiError('InvalidRequest', 'connect needs a network id');
   if (options !== undefined && options !== null && typeof options !== 'object') throw apiError('InvalidRequest', 'options must be an object');
-  const endpoint = options?.endpoint ?? null;
+  const endpoint = named ? options?.endpoint ?? null : null;
   if (endpoint !== null && (typeof endpoint !== 'string' || !URL.canParse(endpoint))) throw apiError('InvalidRequest', 'endpoint must be a URL');
   const context = await engine('connector', 'connectorContext');
-  const matching = networksMatching(await engine('connector', 'connectorNetworks'), networkId, endpoint);
+  const matching = networksMatching(await engine('connector', 'connectorNetworks'), networkId, endpoint, context.network);
   if (!matching.length) throw noNetwork(networkId, endpoint);
   if (matching.some(n => n.id === context.network)) return bindConnection(session, origin, context);
   return oneSwitchAtATime(() => switchAndConnect(session, origin, networkId, endpoint));
@@ -379,9 +384,28 @@ async function switchAndConnect(session, origin, networkId, endpoint) {
     target ??= withWallet.find(n => n.id === outcome.choice);
     refuseWhileBusy(await engine('connector', 'connectorContext'));
   }
-  await engine('connector', 'switchNetwork', { network: target.id });
+  await changingNetwork(() => engine('connector', 'switchNetwork', { network: target.id }));
   if (asked) await approveSite(target.id, origin);
   return newConnection(session, await engine('connector', 'connectorContext'));
+}
+
+// A change of the selected network (the popup's network menu, removing the
+// selected network, a site's connect for another network) is told to the
+// pages holding a connection on the network left (pagesConnectedOn), each by
+// a message to its own document; no other page learns of it. The notice
+// names no network: a page connects again to bind to the new one.
+const CHANGES_NETWORK = new Set(['selectNetwork', 'removeNetwork']);
+async function changingNetwork(run) {
+  const before = await engine('connector', 'connectorContext');
+  try { return await run(); } finally {
+    const after = await engine('connector', 'connectorContext').catch(() => null);
+    if (before.hasWallet && after && after.network !== before.network) {
+      const approved = (await sitesByNetwork())[before.network] ?? {};
+      for (const page of pagesConnectedOn(Object.values(await loadSessions()), before.network, approved)) {
+        chrome.tabs.sendMessage(page.tabId, { type: 'networkChange' }, page.target).catch(() => {});
+      }
+    }
+  }
 }
 
 // addNetwork(definition) on the wallet object: a network a site offers. The
@@ -573,7 +597,8 @@ async function call(session, origin, { connectionId, method, args = [] }) {
 async function dappRequest(port, message) {
   const sender = port.sender;
   const origin = sender.origin ?? new URL(sender.url).origin;
-  const session = await sessionOf(sender.documentId ?? `${sender.tab.id}:${sender.frameId}`, origin, sender.tab.id);
+  const session = await sessionOf(sender.documentId ?? `${sender.tab.id}:${sender.frameId}`, origin, sender.tab.id,
+    sender.documentId ? { documentId: sender.documentId } : { frameId: sender.frameId });
   if (message.op === 'connect') return connect(session, origin, message.networkId, message.options);
   if (message.op === 'addNetwork') return addNetwork(origin, message.definition);
   if (message.op === 'call') return call(session, origin, message);
@@ -623,7 +648,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       ? local[method](message.params ?? {})
       : (async () => {
         const ended = await approvalsEndedBy(method, message.params ?? {});
-        const result = await engine('ui', method, message.params ?? {});
+        const request = () => engine('ui', method, message.params ?? {});
+        const result = await (CHANGES_NETWORK.has(method) ? changingNetwork(request) : request());
         for (const network of ended) await forgetNetwork(network);
         return result;
       })();
