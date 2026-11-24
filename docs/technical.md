@@ -163,12 +163,7 @@ widened.
   are permanent, and can drop them, is handled without any setting: see
   [An indexer that rewinds](#an-indexer-that-rewinds).
 - **Offered by a site.** A site may offer a definition with
-  [`addNetwork`](dapp-connector.md#addnetwork). The window shows it in this
-  form's fields, read-only, after the same checks; a name in use gets a number
-  appended. One with the network id and addresses of a network the wallet has
-  is answered as existing, without a window. A site then selects it with
-  `connect`, whose optional `endpoint` tells apart networks that share a
-  network id.
+  [`addNetwork`](dapp-connector.md#addnetwork).
 
 ```mermaid
 flowchart LR
@@ -292,6 +287,11 @@ sequenceDiagram
   doubling up to 60 seconds. The status shows the error in the meantime. An
   indexer that says (through GraphQL introspection) that it lacks a query the
   sync needs is named in the status, and the wallet does not retry.
+- **Locked means not syncing.** The SDK needs the shielded and DUST secret
+  keys to read the chain, so a locked network does not sync at all.
+- **Spent coins.** A transaction the wallet builds books the coins it spends.
+  Cancelling a review, or letting a preview expire (10 minutes), gives them
+  back.
 
 ### An indexer that rewinds
 
@@ -401,30 +401,10 @@ flowchart TD
 - **Receive and Chain sync** say "Scanning shielded tokens from" the birthday
   block's date and height for a wallet with a birthday.
 
-Measured on Preview on 18 November 2026 (block 166,650), one fresh wallet each,
-counting every WebSocket frame and HTTP body the engine's Midnight code
-exchanged until the facade reported synced (the same `midnight.js` under Node,
-metered on the wire):
-
-| Wallet | Before (event replay, no birthday) | New wallet (birthday at the tip) | Restore without a date |
-| --- | --- | --- | --- |
-| Wire bytes | 28.2 MB | 1.36 MB | 3.39 MB |
-| Messages | 65,908 | 67 | 5,319 |
-| Time to synced | 95.6 s | 7.1 s | 14.9 s |
-| DUST events replayed | 60,558 messages, 24.8 MB | none (projections: about 3 KB) | none (projections: about 3 KB) |
-| Zswap events | 5,269 messages, 2.0 MB | 3 messages | 5,271 messages, 2.0 MB |
-
-In the extension itself, from the click on Create wallet or Restore wallet to
-synced, on the same day: 8.5 seconds for a new wallet and 17.7 seconds for a
-restore without a date (one run each). After a browser restart a synced wallet
-resumes from its snapshot in about a second, unlock included.
-
-About 1.33 MB of every figure is the node connection's start-up (the runtime
-metadata the SDK's node client reads), which no sync mode changes. A wallet
-that has spent DUST many times costs more on its first projections pass: each
-of its past DUST spends is resolved by a nullifier lookup of its own, in
-sequence, from block 0 (a test wallet with 344 spends took 345 lookups, 10 MB
-and 27 s), and each later pass looks up every DUST coin the wallet holds.
+A wallet that has spent DUST many times costs more on its first projections
+pass: each of its past DUST spends is resolved by a nullifier lookup of its
+own, in sequence, from block 0, and each later pass looks up every DUST coin
+the wallet holds.
 
 ### Wallets from before fast sync
 
@@ -437,11 +417,6 @@ re-reads the address's generations from block 0 and checks the coins the
 wallet already holds. If the SDK ever refuses a part of a snapshot, that part
 alone starts afresh. Such a wallet has no birthday, and a rescan scans it from
 the start of the chain as before.
-- **Locked means not syncing.** The SDK needs the shielded and DUST secret
-  keys to read the chain, so a locked network does not sync at all.
-- **Spent coins.** A transaction the wallet builds books the coins it spends.
-  Cancelling a review, or letting a preview expire (10 minutes), gives them
-  back.
 
 ## Keys and unlocking
 
@@ -478,12 +453,11 @@ the start of the chain as before.
   password; the unlock screen says so when it could be mistaken for the
   shared one. Once it is removed, its network uses the shared wallet.
 
-This differs from the Cardano sibling wallet, local-wallet, which asks for the
-password on every signature. Here it cannot. A Midnight wallet cannot follow the chain with public
-keys alone: the shielded and DUST wallets decrypt what they find with their
-secret keys, so those keys, which come from the seed, must be in memory for as
-long as the wallet syncs. So the password protects the seed at rest, and an unlocked wallet is
-protected by the approval step: every spend from the popup is a review and a
+A Midnight wallet cannot follow the chain with public keys alone: the shielded
+and DUST wallets decrypt what they find with their secret keys, so those keys,
+which come from the seed, must be in memory for as long as the wallet syncs. So
+the password protects the seed at rest, and an unlocked wallet is protected by
+the approval step: every spend from the popup is a review and a
 click, and every dApp request is a window the page cannot click for you.
 
 Removing the wallet (Settings, Danger zone) asks for the password, deletes the
@@ -501,13 +475,8 @@ Proving is switchable per network in Settings:
   workers of the engine. Nothing to install. Key material for Midnight's own
   circuits and the public parameters are fetched from
   `https://srs.midnight.network`, which the manifest lists as a host permission.
-  It is slower than a proof server and memory-hungry: on the development
-  machine a transfer's proofs took about 46 seconds, and an earlier
-  measurement of a send with a shielded spend peaked at about 3.5 GB.
-- **Proof server.** On the same machine, with the proof server on localhost,
-  sends took 16 to 20 seconds from Send to submitted, and a contract deploy
-  through the connector about 17 seconds.
-- **Proof server setting.** A URL, `http://localhost:6300` by default (the
+  It is slower than a proof server and memory-hungry.
+- **Proof server.** A URL, `http://localhost:6300` by default (the
   `midnightntwrk/proof-server:9.0.2` image). The wallet sends proving requests
   to it.
 
@@ -663,18 +632,9 @@ select that folder.
 npm run release
 ```
 
-`npm run release` (`scripts/release.mjs`) refuses a working tree with
-uncommitted changes to tracked files (`-- --allow-dirty` packages one anyway,
-named `-dirty`) and a `package.json` whose version is not the manifest's. It
-builds the extension without source maps (`MDWA_NO_SOURCEMAP=1`), checks that
-the manifest's version is the release's, that every file the manifest and the
-pages name exists, and that no source map, dot file, test page or profile is in
-it, then writes `build/release/mdwa-<version>.zip` and its SHA-256 in
-`mdwa-<version>.zip.sha256` (for `shasum -a 256 -c`). The zip holds one folder,
-`mdwa-<version>/`: the minified bundles, the WASM, the pages, the stylesheet,
-the icon, `LICENSE`, and the third-party licences each bundle names
-(`*.LEGAL.txt`). The script prints the zip's path, size, SHA-256 and the commit
-it was built from.
+This writes `build/release/mdwa-<version>.zip`, one folder to load unpacked,
+and its SHA-256 in `mdwa-<version>.zip.sha256`. What it refuses and checks is
+in the header of `scripts/release.mjs`.
 
 ### Try it in Helium
 
@@ -690,27 +650,10 @@ browser (the default is `/Applications/Helium.app/Contents/MacOS/Helium`), and
 
 ### How the build handles the WASM
 
-The SDK ships its ledger and proving runtimes as wasm-bindgen "bundler"
-packages, which import their `.wasm` file as an ES module. esbuild has no
-loader for that, so `scripts/esbuild-plugins.mjs` emits each `.wasm` into
-`build/extension/wasm/` and generates the module that instantiates it. The
-module's own imports (the glue code) are read from the binary at build time and
-bundled as ordinary modules, so each package exists once per bundle: a second
-copy of a ledger would make its objects fail every `instanceof` check of the
-first.
-
-- **Workers** (the engine and the SDK's two proof workers) instantiate the WASM
-  synchronously. Top-level `await` would let a worker's event loop run before its
-  message listener exists, and the SDK posts a proof job right after creating a
-  proof worker. The proof workers are emitted at `dist/` so the path the SDK
-  computes from the engine resolves.
-- **Pages** (background, offscreen, popup, approval) must not bundle a wasm
-  package: the build fails if one does. The background cannot use top-level
-  `await`, and the popup gets everything from the engine.
-- **Checks.** The build fails if a bundle contains test-only SDK code, one of
-  Node's test-only dependencies, or two copies of a ledger or ZKIR package.
-- **The rest.** Tailwind v4 with Kumo builds one stylesheet; the manifest's
-  page policy gets the default endpoints' hosts added.
+`scripts/esbuild-plugins.mjs` emits each of the SDK's `.wasm` files into
+`build/extension/wasm/` and generates the module that instantiates it, once per
+bundle; only workers may load one. The comments in that file and in
+`scripts/build-extension.mjs` explain how and why.
 
 The build uses esbuild with `chrome116` as the target. Node's `Buffer` and
 `process` are shimmed for the SDK's address and codec packages.
@@ -729,16 +672,9 @@ its arguments.
 | `npm run check:rewind` | an indexer's `CHAIN_REWOUND`, under Node against an in-process stub of its GraphQL WebSocket: the SDK's unshielded sync, wrapped as the wallet wraps it, stops quietly and tells the engine once; any other error still fails it for the SDK's retry |
 | `npm run smoke` | the engine's Midnight logic under Node against a real network: a fresh phrase born at the tip, sync, addresses, balances, snapshot and resume of all three parts; with a funded seed (scanned from the start), sends and DUST registration |
 | `npm run check:browser` | the built extension in a browser: the engine boots under the extension's policy, a wallet on Preview syncs, lock and unlock work, the same wallet opens on Preprod without a password, removing it works, the WASM prover proves in a worker |
-| `npm run check:connector` | the built extension and the test dApp in a browser, through every connector method, answering the approval windows (`--prover server` proves with the proof server, `--profile-root` picks where its throwaway profile goes) |
+| `npm run check:connector` | the built extension and the test dApp in a browser, through most of the standard connector API, answering the approval windows (`--prover server` proves with the proof server, `--profile-root` picks where its throwaway profile goes) |
 
-### The local test dApp
-
-`npm run dapp` builds and serves the test dApp on `http://localhost:5190`
-(`--port` changes it). Its packages are installed apart from the extension's, so
-its ledger copy never meets the wallet's: run `npm install --prefix dapp` once.
-`npm run dapp:contract` compiles the counter contract with Compact 0.36.1. The
-compiled output is kept in the repository, so the dApp needs no compiler to run.
-More in [dApp connector](dapp-connector.md#the-local-test-dapp).
+The test dApp is described in [dApp connector](dapp-connector.md#the-local-test-dapp).
 
 ## Security model and limits
 
@@ -777,8 +713,8 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
   9 as of November 2026, so there is none to cross. A wallet with many past
   DUST spends pays for them on its first pass (see
   [What each wallet downloads](#what-each-wallet-downloads)).
-- **Mainnet and Preprod sync were not exercised.** Development had no Blockfrost
-  project id. Preview and a local network (Undeployed) were. Blockfrost's
+- **Mainnet and Preprod sync are untested.** Only Preview and a local network
+  (Undeployed) were tested. Blockfrost's
   documentation lists the DUST queries the sync uses as Beta, and whether it
   offers `zswapMerkleTreeCollapsedUpdate` is unknown. If it says it lacks one of
   the sync's queries, Chain sync names it instead of syncing without end; a
@@ -787,14 +723,10 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
   editing.
 - **One account per wallet.** One seed gives one set of three addresses; there is
   no account switcher and no address rotation.
-- **Not implemented:** hardware wallets; sending DUST; signing data with
-  anything but the unshielded key; other swap segments than 1 in `makeIntent`;
-  a per-segment execution status in `getTxHistory` (the SDK keeps one status
-  per transaction, so only segment 0 is reported).
-- **Single-flight.** One transaction at a time, and one proof at a time.
+- **Not implemented:** hardware wallets; sending DUST. The connector's limits
+  are in [dApp connector](dapp-connector.md#limits).
 - **Compatibility with other Midnight wallets' phrases** was not checked.
-- **Browsers.** Built for Chrome 116 and newer; Helium is the other browser it
-  was run in.
+- **Browsers.** Built for Chrome 116 and newer, and tested in Helium.
 
 ## Repository layout
 
@@ -814,6 +746,6 @@ More in [dApp connector](dapp-connector.md#the-local-test-dapp).
 | `extension/src/inject.js`, `content.js` | the page's connector object and its relay |
 | `extension/src/ui/` | popup and approval windows (React) |
 | `wallet/networks.mjs` | built-in networks and user definitions, default endpoints and their checks, the page policy check, Blockfrost URL handling, units |
-| `scripts/` | extension build and its esbuild plugins, release package, Helium launcher, the smoke, browser, connector, custom-network, birthday and rewind checks |
+| `scripts/` | extension build and its esbuild plugins, release package, Helium launcher, the smoke, browser, connector, custom-network, birthday, rewind and requests checks |
 | `dapp/` | the local test dApp: `index.html`, `app.js`, `serve.mjs`, `compile.mjs`, `contract/counter.compact` |
-| `docs/` | this documentation and its screenshots |
+| `docs/` | this documentation |

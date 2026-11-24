@@ -50,7 +50,6 @@ export const DEFAULT_PROOF_SERVER = 'http://localhost:6300';
 
 // NIGHT is the unshielded native token: 6 decimals (smallest unit STAR).
 // DUST pays fees: 15 decimals (smallest unit SPECK).
-export const NIGHT_TOKEN = '0'.repeat(64);
 export const NIGHT_DECIMALS = 6;
 export const DUST_DECIMALS = 15;
 

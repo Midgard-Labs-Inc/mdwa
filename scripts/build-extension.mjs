@@ -7,7 +7,7 @@
 // that instantiates it.
 import { build } from 'esbuild';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, rmSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NETWORKS } from '../wallet/networks.mjs';
@@ -68,15 +68,13 @@ for (const worker of ['../../dist/proof-worker.js', '../../dist/proof-worker-zki
 // Pages and the service worker. None of them may load a wasm package: the
 // background cannot use top-level await, and the popup gets everything from
 // the engine.
-const uiEntries = { popup: path.join(src, 'ui/popup.jsx'), approve: path.join(src, 'ui/approve.jsx') };
-const missingUi = Object.entries(uiEntries).filter(([, file]) => !existsSync(file)).map(([name]) => name);
-if (missingUi.length && !process.env.MDWA_SKIP_UI) throw new Error(`Missing UI entries: ${missingUi.join(', ')}`);
 const pages = await build({
   ...common,
   entryPoints: {
     background: path.join(src, 'background.js'),
     offscreen: path.join(src, 'offscreen.js'),
-    ...Object.fromEntries(Object.entries(uiEntries).filter(([name]) => !missingUi.includes(name))),
+    popup: path.join(src, 'ui/popup.jsx'),
+    approve: path.join(src, 'ui/approve.jsx'),
   },
   outdir: out,
   plugins: [wasmPlugin({ sync: false, out }), forbidPlugin()],
@@ -113,15 +111,10 @@ for (const [file, output] of Object.entries(workers.metafile.outputs)) {
 }
 
 // Kumo (Cloudflare's design system) + Tailwind CSS v4 -> one stylesheet.
-if (existsSync(path.join(src, 'ui/styles.css'))) {
-  const tailwind = spawnSync(process.execPath, [path.join(modules, '@tailwindcss/cli/dist/index.mjs'),
-    '-i', path.join(src, 'ui/styles.css'), '-o', path.join(out, 'style.css'), '--minify'], { cwd: root, encoding: 'utf8' });
-  if (tailwind.status !== 0) throw new Error(`Tailwind failed: ${tailwind.stderr}`);
-} else if (!process.env.MDWA_SKIP_UI) throw new Error('Missing extension/src/ui/styles.css');
-for (const file of ['popup.html', 'approve.html', 'offscreen.html', 'icon.png']) {
-  if (existsSync(path.join(root, 'extension', file))) copyFileSync(path.join(root, 'extension', file), path.join(out, file));
-  else if (!process.env.MDWA_SKIP_UI) throw new Error(`Missing extension/${file}`);
-}
+const tailwind = spawnSync(process.execPath, [path.join(modules, '@tailwindcss/cli/dist/index.mjs'),
+  '-i', path.join(src, 'ui/styles.css'), '-o', path.join(out, 'style.css'), '--minify'], { cwd: root, encoding: 'utf8' });
+if (tailwind.status !== 0) throw new Error(`Tailwind failed: ${tailwind.stderr}`);
+for (const file of ['popup.html', 'approve.html', 'offscreen.html', 'icon.png']) copyFileSync(path.join(root, 'extension', file), path.join(out, file));
 
 // The default endpoints' hosts are named in connect-src explicitly; https:
 // and wss: stay in it because every endpoint is editable in Settings.

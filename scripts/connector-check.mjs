@@ -4,15 +4,14 @@
 // .connector-test-profiles/), the test dApp (dapp/, served on localhost) and a
 // local chain. It creates a wallet on Undeployed, funds it from a dev seed
 // under Node, registers its NIGHT for DUST, then drives the dApp through
-// every connector method, answering the approval windows as a user would,
-// and prints what it saw. The browser runs headless (--headed to watch).
+// most of the standard connector API, answering the approval windows as a
+// user would, and prints what it saw. The browser runs headless (--headed to watch).
 //
 //   npm run build:extension && node scripts/connector-check.mjs \
 //     --devnet-seed <hex> --devnet-node ws://localhost:9954 \
 //     --devnet-indexer http://localhost:8098 --devnet-proof-server http://localhost:6310
 //
 // With --no-funds it skips the funding and every step that needs funds.
-// --screenshots <dir> saves each approval window before it is answered.
 // The Node-side funding proves with the proof server; the extension proves
 // with the prover the wallet is set to (WASM unless --prover server). Each
 // funded step runs once. The browser and the dApp server are closed at the
@@ -146,7 +145,6 @@ try {
 
   // ---------------------------------------------------- approval windows ---
   const seen = new Set();
-  let shots = 0;
   async function nextApproval(timeoutMs = 120000) {
     for (const until = Date.now() + timeoutMs; Date.now() < until; await wait(250)) {
       const target = browser.targets().find(t => t.url().includes('/approve.html?id=') && !seen.has(t.url()));
@@ -205,10 +203,6 @@ try {
       }
       const text = await textOf(page).catch(() => '');
       log(`approval -> ${label}:`, short(text, 1200));
-      if (args.screenshots) {
-        const file = path.join(args.screenshots, `${String(++shots).padStart(2, '0')}-${label.replace(/\W+/g, '-')}.png`);
-        await page.screenshot({ path: file, fullPage: true }).catch(error => log('screenshot failed', error.message));
-      }
       if (expect && !expect.test(text)) throw new Error(`The approval window did not show ${expect}: ${short(text)}`);
       await click(page, label);
       return text;

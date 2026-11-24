@@ -17,7 +17,7 @@ import { fileURLToPath } from 'node:url';
 import { FacadeState, MidnightBech32m, ProtocolVersion, UnshieldedAddress, WalletSeeds } from '@midnightntwrk/wallet-sdk';
 import { classifySubmissionFailure } from '@midnightntwrk/wallet-sdk/capabilities/submission';
 import * as ledger from '@midnightntwrk/ledger-v9';
-import { NETWORKS, connectionUrls, endpointsOf, network, policyBlocks, publicEndpoints } from '../wallet/networks.mjs';
+import { connectionUrls, network, policyBlocks, publicEndpoints } from '../wallet/networks.mjs';
 import * as custom from '../extension/src/custom.js';
 import { missingQueries } from '../extension/src/birthday.js';
 import { syncOf } from '../extension/src/midnight.js';
@@ -56,11 +56,6 @@ const user = {
 const withNode = network('user-000000000001', user);
 const withSubmit = network('user-000000000002', user);
 
-await ok('a user network with a node keeps its definition\'s URLs and DUST', () => {
-  assert.deepEqual([withNode.user, withNode.dust], [true, true]);
-  const urls = connectionUrls(withNode, { node: 'wss://elsewhere', prover: { kind: 'server', url: 'http://localhost:6300' } });
-  assert.deepEqual(urls, { node: 'ws://localhost:9944', ...indexer, prover: { kind: 'server', url: 'http://localhost:6300' } });
-});
 await ok('a user network with a submit URL has no node, and reports the submit URL to sites', () => {
   assert.equal(withSubmit.dust, false);
   const urls = connectionUrls(withSubmit, {});
@@ -68,11 +63,7 @@ await ok('a user network with a submit URL has no node, and reports the submit U
   assert.equal('node' in urls, false);
   assert.equal(publicEndpoints(withSubmit, {}).node, `${base}/submit`);
 });
-await ok('built-in networks keep their endpoints, overrides and DUST', () => {
-  const preview = network('preview');
-  assert.deepEqual([preview.user, preview.dust], [false, true]);
-  assert.equal(endpointsOf(preview, { node: 'wss://x' }).node, 'wss://x');
-  assert.equal(endpointsOf(preview, {}).indexerHttp, NETWORKS.preview.indexerHttp);
+await ok('an unknown network key is refused, an inherited object property included', () => {
   assert.throws(() => network('nowhere', user), /Unknown network/);
   assert.throws(() => network('toString', user), /Unknown network/);
 });

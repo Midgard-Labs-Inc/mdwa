@@ -450,21 +450,17 @@ Errors reach the page as `Error`s with `type: "DAppConnectorAPIError"` and a
 - Proofs of the wallet and of dApps share one queue. A dApp's contract call
   waits behind a send, and the in-browser prover is slow; see
   [Proving](technical.md#proving).
-- `makeIntent` supports segment 1 only. `signData` supports the unshielded key
-  only. `getTxHistory` has no per-segment status.
 - The connector object is installed in top-level frames only.
 - Approval windows name a custom token by your label for it, or by its short
   type when it has none (see [Custom tokens](technical.md#custom-tokens)).
-- With the WASM prover, a proof that fails after its circuit check passed (a
-  prover key that does not belong to its circuit) is not reported by the SDK's
-  prover for 10 minutes, and holds up the proof queue that long.
 
 ## The local test dApp
 
 `dapp/` is a test dApp for the connector: a page with one button per connector
 method, each showing its result or error, plus a contract round trip with
 Midnight.js 5.0.1. The contract is `dapp/contract/counter.compact`, a public
-counter with one `increment` circuit and no witnesses, so a call proves quickly
+counter with an `increment` circuit and a `deposit` circuit that also takes
+NIGHT from the caller, both without witnesses, so a call proves quickly
 and the round trip through the wallet (balance, prove, sign, submit) is what
 gets exercised.
 
@@ -486,7 +482,7 @@ compiled contract is served under `/managed`, the layout Midnight.js's
 npm run dapp:contract
 ```
 
-compiles the counter with Compact 0.36.1 into `dapp/contract/managed` (about 75
+compiles the counter with Compact 0.36.1 into `dapp/contract/managed` (about 200
 kB; the output is kept in the repository). It expects the `compact` tool and the
 public parameters in `~/.cache/midnight/zk-params`, or `MIDNIGHT_ZK_PARAMS`.
 
@@ -495,6 +491,7 @@ connect to a network id mdwa does not have, `addNetwork` and `watchToken` with a
 definition or token you edit on the page, the reads,
 `signData`, the three transfers (unshielded, without fees, shielded),
 `balanceSealedTransaction`, `submitTransaction`, `makeIntent` (and a refused
-segment), deploy, increment and read counter, and a transport test that pushes a
-large prover key through the chunked upload. `npm run check:connector` drives
-this page through every method.
+segment), deploy, increment, deposit and read counter, a transport test that
+pushes a large prover key through the chunked upload, and a proof of a bad
+preimage. `npm run check:connector` drives this page through most of the
+standard connector API.

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Compiles the test dApp's contract (dapp/contract/counter.compact) with
 // Compact compiler 0.36.1 into dapp/contract/managed (contract module, ZKIR,
-// keys; about 75 kB, so the output is kept in the repository and the dApp
+// keys; about 200 kB, so the output is kept in the repository and the dApp
 // needs no compiler to run). The machine's default compiler is left alone:
 // the version is named on the command line (`compact compile +0.36.1`).
 //
