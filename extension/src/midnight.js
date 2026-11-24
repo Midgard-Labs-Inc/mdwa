@@ -42,6 +42,7 @@ import { Effect, Option, Stream } from 'effect';
 import * as ledger from '@midnightntwrk/ledger-v9';
 import * as ledgerV8 from '@midnightntwrk/ledger-v8';
 import { mnemonicToSeed } from '@scure/bip39';
+import { fewestInputs } from '../../wallet/coins.mjs';
 import { connectionUrls } from '../../wallet/networks.mjs';
 import { gql, shieldedAnchor, zswapCollapsedUpdate } from './birthday.js';
 import { noDustWallet, submissionService } from './custom.js';
@@ -305,11 +306,12 @@ export const rewindAware = (makeService, onRewound) => (...args) => {
   };
 };
 
+// Both variants spend the unshielded outputs fewestInputs picks (wallet/coins.mjs).
 const unshieldedWallet = (configuration, onRewound) => CustomForkingUnshieldedWallet(
   { ...configuration, chainVersionProbe: configuration.chainVersionProbe ?? makeIndexerChainVersionProbe(configuration) },
-  { builder: new UnshieldedV1Builder().withDefaults(), configuration },
+  { builder: new UnshieldedV1Builder().withDefaults().withCoinSelection(() => fewestInputs), configuration },
   {
-    builder: new UnshieldedV2Builder().withDefaults()
+    builder: new UnshieldedV2Builder().withDefaults().withCoinSelection(() => fewestInputs)
       .withSync(rewindAware(UnshieldedSync.makeDefaultSyncService, onRewound), UnshieldedSync.makeDefaultSyncCapability)
       .withMigration(() => UnshieldedMigration.makeCrossLedgerMigration()),
     configuration,

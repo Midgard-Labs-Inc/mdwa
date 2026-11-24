@@ -523,6 +523,9 @@ flowchart LR
   codec and must be for the selected network. **MAX** gives a recipient what is
   left of that token after the other recipients. A transaction expires 30
   minutes after it is balanced; the review shows the time.
+- **Which outputs.** Balancing a site's transaction spends the smallest
+  unshielded output that covers what is missing, or else the largest and then
+  again, so one input whenever one output is enough (wallet/coins.mjs).
 - **Fees.** The network fee is paid in DUST, not in the token you send. If the
   wallet has too little DUST, the send fails with a shortfall. A fee books the
   DUST coin it spends, and the DUST wallet learns the change coin only when a

@@ -11,6 +11,7 @@
     "check:birthday": "node scripts/birthday-check.mjs",
     "check:rewind": "node scripts/rewind-check.mjs",
     "check:requests": "node scripts/requests-check.mjs",
+    "check:coins": "node scripts/coins-check.mjs",
     "check:browser": "node scripts/build-extension.mjs && node scripts/browser-check.mjs",
     "dapp": "node dapp/serve.mjs",
     "dapp:contract": "node dapp/compile.mjs",
